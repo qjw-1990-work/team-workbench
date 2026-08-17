@@ -132,10 +132,6 @@ async function loadData() {
           parsed.collapsedClients = localData.collapsedClients || [];
           lastSyncTime = Date.now();
           lastDataSnapshot = makeSnapshot(parsed);
-          lastMetaSnapshot = JSON.stringify({
-            members: parsed.members, clients: parsed.clients,
-            notifications: parsed.notifications, taskCount: parsed.tasks.length,
-          });
           serverDataLoaded = true;
           saveLocalDataCache(parsed);
           return parsed;
@@ -158,10 +154,6 @@ async function loadData() {
       if (!parsed.collapsedClients) parsed.collapsedClients = localData.collapsedClients || [];
       lastSyncTime = Date.now();
       lastDataSnapshot = makeSnapshot(parsed);
-      lastMetaSnapshot = JSON.stringify({
-        members: parsed.members, clients: parsed.clients,
-        notifications: parsed.notifications, taskCount: parsed.tasks.length,
-      });
       serverDataLoaded = true;
       console.log(`从本地缓存加载: ${parsed.tasks.length} 条任务`);
       // 立即同步到云端（不等后台定时器），防止 pollSync 用旧数据覆盖本地
@@ -195,10 +187,6 @@ async function loadData() {
       if (!parsed.collapsedClients) parsed.collapsedClients = [];
       lastSyncTime = Date.now();
       lastDataSnapshot = makeSnapshot(parsed);
-      lastMetaSnapshot = JSON.stringify({
-        members: parsed.members, clients: parsed.clients,
-        notifications: parsed.notifications, taskCount: parsed.tasks.length,
-      });
       serverDataLoaded = true;
       saveLocalDataCache(parsed);
       console.log(`从云端加载: ${parsed.tasks.length} 条任务`);
@@ -310,20 +298,36 @@ async function saveDataInternal() {
       var preCheck = await apiFetch(CLOUD_DATA_PATH);
       if (preCheck.ok) {
         var cloudPre = await preCheck.json();
-        if (cloudPre && cloudPre.tasks && cloudPre.tasks.length > syncData.tasks.length) {
-          // 云端有更多任务，合并：保留本地任务，补充云端独有的任务
-          var localTaskIds = new Set(syncData.tasks.map(function(t) { return t.id; }));
-          var mergedTasks = syncData.tasks.slice();
+        if (cloudPre && cloudPre.tasks) {
+          var localTaskMap = {};
+          syncData.tasks.forEach(function(t) { localTaskMap[t.id] = t; });
+          var cloudTaskMap = {};
+          cloudPre.tasks.forEach(function(ct) { cloudTaskMap[ct.id] = ct; });
+          var merged = false;
+
+          // 1. 补充云端独有的任务（其他设备新增的）
           cloudPre.tasks.forEach(function(ct) {
-            if (!localTaskIds.has(ct.id) && !deletedTaskIds.has(ct.id)) {
-              mergedTasks.push(ct);
+            if (!localTaskMap[ct.id] && !deletedTaskIds.has(ct.id)) {
+              syncData.tasks.push(ct);
+              merged = true;
             }
           });
-          syncData.tasks = mergedTasks;
-          // 同步更新 data 对象
-          data.tasks = mergedTasks;
-          saveLocalDataCache(data);
-          console.log(`保存前合并云端数据: 本地 ${syncData.tasks.length} 条 (含云端 ${cloudPre.tasks.length - syncData.tasks.length + mergedTasks.length} 条补充)`);
+
+          // 2. 合并云端任务的内容变更（其他设备编辑的）
+          // 如果云端某任务内容与本地不同，说明被其他设备修改过，使用云端版本
+          syncData.tasks.forEach(function(lt, idx) {
+            var ct = cloudTaskMap[lt.id];
+            if (ct && JSON.stringify(ct) !== JSON.stringify(lt)) {
+              syncData.tasks[idx] = ct;
+              merged = true;
+            }
+          });
+
+          if (merged) {
+            data.tasks = syncData.tasks.slice();
+            saveLocalDataCache(data);
+            console.log('保存前合并云端数据变更');
+          }
         }
       }
     } catch (e) {
@@ -340,10 +344,6 @@ async function saveDataInternal() {
       lastSyncTime = Date.now();
       lastLocalSaveTime = Date.now(); // 记录本地保存时间，用于 pollSync 保护窗口
       lastDataSnapshot = makeSnapshot(syncData);
-      lastMetaSnapshot = JSON.stringify({
-        members: syncData.members, clients: syncData.clients,
-        notifications: syncData.notifications, taskCount: syncData.tasks.length,
-      });
       deletedTaskIds.clear();
       console.log(`保存完成: ${syncData.tasks.length} 条任务`);
     } else {
@@ -358,7 +358,6 @@ async function saveDataInternal() {
 
 // 轮询同步：从云端拉取最新数据，带本地保存保护
 let lastDataSnapshot = '';
-let lastMetaSnapshot = '';
 let lastLocalSaveTime = 0; // 本地最近一次保存的时间戳
 const SAVE_GUARD_WINDOW = 8000; // 保存后 8 秒内，pollSync 不会用云端数据覆盖本地（防止云端写入延迟导致回退）
 
@@ -387,40 +386,29 @@ async function pollSync() {
     };
     normalizeData(parsed);
 
-    const metaSnapshot = JSON.stringify({
-      members: parsed.members,
-      clients: parsed.clients,
-      notifications: parsed.notifications,
-      taskCount: parsed.tasks.length,
-    });
-    if (lastMetaSnapshot && metaSnapshot === lastMetaSnapshot) return;
-    lastMetaSnapshot = metaSnapshot;
-
     const snapshot = makeSnapshot(parsed);
-    if (snapshot !== lastDataSnapshot) {
-      // 保存保护：如果本地最近刚保存过，且云端任务数少于本地，说明云端数据可能尚未同步完成
-      // 此时拒绝用云端数据覆盖本地，防止任务消失
-      const now = Date.now();
-      const localTaskCount = (data && data.tasks) ? data.tasks.length : 0;
-      const cloudTaskCount = parsed.tasks.length;
-      if (now - lastLocalSaveTime < SAVE_GUARD_WINDOW && cloudTaskCount < localTaskCount) {
-        console.warn(`pollSync: 保存保护窗口内，云端任务(${cloudTaskCount})少于本地(${localTaskCount})，跳过同步`);
-        return;
-      }
+    if (snapshot === lastDataSnapshot) return; // 数据无变化，跳过
 
-      const currentUserId = data.currentUserId;
-      const collapsedClients = data.collapsedClients;
-      data = parsed;
-      data.currentUserId = currentUserId;
-      data.collapsedClients = collapsedClients || [];
-      lastDataSnapshot = snapshot;
-      saveLocalDataCache(data);
-      syncTaskStatuses();
-      renderAll();
-      console.log(`pollSync: 云端数据已同步 (${cloudTaskCount} 条任务)`);
-    } else {
-      lastDataSnapshot = snapshot;
+    // 保存保护：如果本地最近刚保存过，且云端任务数少于本地，说明云端数据可能尚未同步完成
+    // 此时拒绝用云端数据覆盖本地，防止任务消失
+    const now = Date.now();
+    const localTaskCount = (data && data.tasks) ? data.tasks.length : 0;
+    const cloudTaskCount = parsed.tasks.length;
+    if (now - lastLocalSaveTime < SAVE_GUARD_WINDOW && cloudTaskCount < localTaskCount) {
+      console.warn(`pollSync: 保存保护窗口内，云端任务(${cloudTaskCount})少于本地(${localTaskCount})，跳过同步`);
+      return;
     }
+
+    const currentUserId = data.currentUserId;
+    const collapsedClients = data.collapsedClients;
+    data = parsed;
+    data.currentUserId = currentUserId;
+    data.collapsedClients = collapsedClients || [];
+    lastDataSnapshot = snapshot;
+    saveLocalDataCache(data);
+    syncTaskStatuses();
+    renderAll();
+    console.log(`pollSync: 云端数据已同步 (${cloudTaskCount} 条任务)`);
   } catch (e) {
     // 静默失败
   }
