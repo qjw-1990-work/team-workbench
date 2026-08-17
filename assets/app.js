@@ -164,8 +164,10 @@ async function loadData() {
       });
       serverDataLoaded = true;
       console.log(`从本地缓存加载: ${parsed.tasks.length} 条任务`);
-      // 后台同步到云端（确保其他设备能看到最新数据）
-      setTimeout(function() { syncToCloudIfNeeded(parsed); }, 2000);
+      // 立即同步到云端（不等后台定时器），防止 pollSync 用旧数据覆盖本地
+      // 同时记录保存时间，触发 pollSync 保护窗口
+      lastLocalSaveTime = Date.now();
+      saveToCloudImmediate(parsed);
       return parsed;
     }
   }
@@ -226,6 +228,24 @@ async function loadData() {
 
 // 后台同步到云端（仅在本地有数据且云端无数据时）
 var cloudSyncInProgress = false;
+
+// 立即同步到云端（fire-and-forget，不阻塞页面加载）
+async function saveToCloudImmediate(d) {
+  try {
+    var syncData = JSON.parse(JSON.stringify(d));
+    delete syncData.currentUserId;
+    delete syncData.collapsedClients;
+    await apiFetch(CLOUD_DATA_PATH, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(syncData),
+    });
+    console.log('立即同步到云端完成');
+  } catch (e) {
+    console.warn('立即同步到云端失败:', e.message);
+  }
+}
+
 async function syncToCloudIfNeeded(d) {
   if (cloudSyncInProgress) return;
   cloudSyncInProgress = true;
