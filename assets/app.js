@@ -105,32 +105,69 @@ function makeSnapshot(d) {
   });
 }
 
-// 加载数据：localStorage 优先，云端兜底
+// 加载数据：localStorage 优先，但会对比云端确保数据最新
 async function loadData() {
   // 1. 优先从 localStorage 加载（最快，包含用户最近修改）
   var localData = loadLocalData();
   if (localData && localData.tasks && localData.tasks.length > 0) {
-    var parsed = {
-      tasks: localData.tasks || [],
-      members: localData.members || defaultData.members,
-      clients: localData.clients || defaultData.clients,
-      permissions: localData.permissions || JSON.parse(JSON.stringify(defaultPermissions)),
-      notifications: localData.notifications || [],
-    };
-    normalizeData(parsed);
-    parsed.currentUserId = getCurrentUserId();
-    if (!parsed.collapsedClients) parsed.collapsedClients = localData.collapsedClients || [];
-    lastSyncTime = Date.now();
-    lastDataSnapshot = makeSnapshot(parsed);
-    lastMetaSnapshot = JSON.stringify({
-      members: parsed.members, clients: parsed.clients,
-      notifications: parsed.notifications, taskCount: parsed.tasks.length,
-    });
-    serverDataLoaded = true;
-    console.log(`从本地缓存加载: ${parsed.tasks.length} 条任务`);
-    // 后台同步到云端（确保其他设备能看到最新数据）
-    setTimeout(function() { syncToCloudIfNeeded(parsed); }, 2000);
-    return parsed;
+    // 后台检查云端是否有更新的数据（防止 stale localStorage 覆盖）
+    var cloudHasNewer = false;
+    try {
+      var cloudCheck = await apiFetch(CLOUD_DATA_PATH);
+      if (cloudCheck.ok) {
+        var cloudData = await cloudCheck.json();
+        if (cloudData && cloudData.tasks && cloudData.tasks.length > localData.tasks.length) {
+          // 云端任务更多，说明本地数据已过期，使用云端数据
+          cloudHasNewer = true;
+          console.log(`云端有更新数据 (${cloudData.tasks.length} vs ${localData.tasks.length} 条)，使用云端数据`);
+          var parsed = {
+            tasks: cloudData.tasks || [],
+            members: cloudData.members || defaultData.members,
+            clients: cloudData.clients || defaultData.clients,
+            permissions: cloudData.permissions || JSON.parse(JSON.stringify(defaultPermissions)),
+            notifications: cloudData.notifications || [],
+          };
+          normalizeData(parsed);
+          parsed.currentUserId = getCurrentUserId();
+          parsed.collapsedClients = localData.collapsedClients || [];
+          lastSyncTime = Date.now();
+          lastDataSnapshot = makeSnapshot(parsed);
+          lastMetaSnapshot = JSON.stringify({
+            members: parsed.members, clients: parsed.clients,
+            notifications: parsed.notifications, taskCount: parsed.tasks.length,
+          });
+          serverDataLoaded = true;
+          saveLocalDataCache(parsed);
+          return parsed;
+        }
+      }
+    } catch (e) {
+      console.warn('云端对比检查失败，使用本地数据:', e.message);
+    }
+
+    if (!cloudHasNewer) {
+      var parsed = {
+        tasks: localData.tasks || [],
+        members: localData.members || defaultData.members,
+        clients: localData.clients || defaultData.clients,
+        permissions: localData.permissions || JSON.parse(JSON.stringify(defaultPermissions)),
+        notifications: localData.notifications || [],
+      };
+      normalizeData(parsed);
+      parsed.currentUserId = getCurrentUserId();
+      if (!parsed.collapsedClients) parsed.collapsedClients = localData.collapsedClients || [];
+      lastSyncTime = Date.now();
+      lastDataSnapshot = makeSnapshot(parsed);
+      lastMetaSnapshot = JSON.stringify({
+        members: parsed.members, clients: parsed.clients,
+        notifications: parsed.notifications, taskCount: parsed.tasks.length,
+      });
+      serverDataLoaded = true;
+      console.log(`从本地缓存加载: ${parsed.tasks.length} 条任务`);
+      // 后台同步到云端（确保其他设备能看到最新数据）
+      setTimeout(function() { syncToCloudIfNeeded(parsed); }, 2000);
+      return parsed;
+    }
   }
 
   // 2. 从 MantleDB 云端加载
@@ -244,10 +281,34 @@ async function saveDataInternal() {
     // 1. 先保存到本地缓存（快速、可靠）
     saveLocalDataCache(data);
 
-    // 2. 保存到云端
-    const syncData = JSON.parse(JSON.stringify(data));
+    // 2. 保存前检查云端：如果云端任务数 > 本地任务数，说明本地数据已过期，先合并云端数据
+    // 这防止其他设备的修改被本地 stale 数据覆盖
+    var syncData = JSON.parse(JSON.stringify(data));
     delete syncData.currentUserId;
     delete syncData.collapsedClients;
+    try {
+      var preCheck = await apiFetch(CLOUD_DATA_PATH);
+      if (preCheck.ok) {
+        var cloudPre = await preCheck.json();
+        if (cloudPre && cloudPre.tasks && cloudPre.tasks.length > syncData.tasks.length) {
+          // 云端有更多任务，合并：保留本地任务，补充云端独有的任务
+          var localTaskIds = new Set(syncData.tasks.map(function(t) { return t.id; }));
+          var mergedTasks = syncData.tasks.slice();
+          cloudPre.tasks.forEach(function(ct) {
+            if (!localTaskIds.has(ct.id) && !deletedTaskIds.has(ct.id)) {
+              mergedTasks.push(ct);
+            }
+          });
+          syncData.tasks = mergedTasks;
+          // 同步更新 data 对象
+          data.tasks = mergedTasks;
+          saveLocalDataCache(data);
+          console.log(`保存前合并云端数据: 本地 ${syncData.tasks.length} 条 (含云端 ${cloudPre.tasks.length - syncData.tasks.length + mergedTasks.length} 条补充)`);
+        }
+      }
+    } catch (e) {
+      console.warn('保存前云端检查失败:', e.message);
+    }
 
     const saveRes = await apiFetch(CLOUD_DATA_PATH, {
       method: 'POST',
@@ -257,6 +318,7 @@ async function saveDataInternal() {
 
     if (saveRes.ok) {
       lastSyncTime = Date.now();
+      lastLocalSaveTime = Date.now(); // 记录本地保存时间，用于 pollSync 保护窗口
       lastDataSnapshot = makeSnapshot(syncData);
       lastMetaSnapshot = JSON.stringify({
         members: syncData.members, clients: syncData.clients,
@@ -274,13 +336,16 @@ async function saveDataInternal() {
   }
 }
 
-// 轮询同步：仅检查 meta bin 的变化
+// 轮询同步：从云端拉取最新数据，带本地保存保护
 let lastDataSnapshot = '';
 let lastMetaSnapshot = '';
+let lastLocalSaveTime = 0; // 本地最近一次保存的时间戳
+const SAVE_GUARD_WINDOW = 8000; // 保存后 8 秒内，pollSync 不会用云端数据覆盖本地（防止云端写入延迟导致回退）
+
 async function pollSync() {
   if (!serverDataLoaded) return;
   if (isSaving) return;
-  if (saveTimer) return;
+  if (saveTimer) return; // 有待保存的修改，等待保存完成
   if (document.querySelector('.modal.show')) return;
   try {
     const res = await apiFetch(CLOUD_DATA_PATH);
@@ -313,6 +378,16 @@ async function pollSync() {
 
     const snapshot = makeSnapshot(parsed);
     if (snapshot !== lastDataSnapshot) {
+      // 保存保护：如果本地最近刚保存过，且云端任务数少于本地，说明云端数据可能尚未同步完成
+      // 此时拒绝用云端数据覆盖本地，防止任务消失
+      const now = Date.now();
+      const localTaskCount = (data && data.tasks) ? data.tasks.length : 0;
+      const cloudTaskCount = parsed.tasks.length;
+      if (now - lastLocalSaveTime < SAVE_GUARD_WINDOW && cloudTaskCount < localTaskCount) {
+        console.warn(`pollSync: 保存保护窗口内，云端任务(${cloudTaskCount})少于本地(${localTaskCount})，跳过同步`);
+        return;
+      }
+
       const currentUserId = data.currentUserId;
       const collapsedClients = data.collapsedClients;
       data = parsed;
@@ -322,6 +397,7 @@ async function pollSync() {
       saveLocalDataCache(data);
       syncTaskStatuses();
       renderAll();
+      console.log(`pollSync: 云端数据已同步 (${cloudTaskCount} 条任务)`);
     } else {
       lastDataSnapshot = snapshot;
     }
