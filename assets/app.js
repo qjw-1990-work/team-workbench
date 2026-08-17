@@ -2268,7 +2268,7 @@ async function init() {
   const loadingOverlay = document.getElementById('loadingOverlay');
   if (loadingOverlay) loadingOverlay.classList.add('hide');
   // 启动轮询同步（每15秒检查一次其他用户的更新）
-  setInterval(pollSync, 15000);
+  setInterval(pollSync, 5000);
 }
 
 // 防止 renderAll 在 data 加载完成前被调用
