@@ -1,0 +1,376 @@
+{
+  "tasks": [
+    {
+      "id": "t1",
+      "title": "官网首页改版设计",
+      "segment": "上海HELLA",
+      "progress": "初稿已完成，等待客户反馈中",
+      "tags": [
+        "设计",
+        "官网"
+      ],
+      "assignees": [
+        "u2",
+        "u1"
+      ],
+      "clientId": "c1",
+      "dueDate": "2026-08-15",
+      "completedDate": "",
+      "createdAt": "2026-08-05T10:30:00",
+      "createdBy": "u3",
+      "comments": [
+        {
+          "id": "c1",
+          "userId": "u3",
+          "text": "客户比较着急，麻烦优先处理",
+          "time": "2026-08-05T11:00:00"
+        },
+        {
+          "id": "c2",
+          "userId": "u2",
+          "text": "好的，初稿周三出",
+          "time": "2026-08-05T14:20:00"
+        }
+      ],
+      "status": "overdue",
+      "firstViewedBy": {
+        "u2": "2026-08-06T09:00:00",
+        "u1": "2026-08-06T09:00:00"
+      },
+      "commentReadBy": {},
+      "history": []
+    },
+    {
+      "id": "t2",
+      "title": "用户管理系统开发",
+      "segment": "长春HELLA",
+      "progress": "需求分析完成，准备进入开发阶段",
+      "tags": [
+        "后端",
+        "核心功能"
+      ],
+      "assignees": [
+        "u1"
+      ],
+      "clientId": "c1",
+      "dueDate": "2026-08-20",
+      "completedDate": "",
+      "createdAt": "2026-08-06T09:00:00",
+      "createdBy": "u3",
+      "comments": [],
+      "status": "in-progress",
+      "firstViewedBy": {
+        "u1": "2026-08-17T00:40:35.641Z"
+      },
+      "commentReadBy": {},
+      "history": []
+    },
+    {
+      "id": "t3",
+      "title": "数据看板前端开发",
+      "segment": "京瓷",
+      "progress": "已完成开发并交付",
+      "tags": [
+        "前端",
+        "数据"
+      ],
+      "assignees": [
+        "u2"
+      ],
+      "clientId": "c2",
+      "dueDate": "2026-08-10",
+      "completedDate": "2026-08-07",
+      "createdAt": "2026-08-01T14:00:00",
+      "createdBy": "u3",
+      "comments": [
+        {
+          "id": "c3",
+          "userId": "u2",
+          "text": "开发完成，已交付",
+          "time": "2026-08-07T16:30:00"
+        }
+      ],
+      "status": "done",
+      "firstViewedBy": {
+        "u2": "2026-08-02T10:00:00"
+      },
+      "commentReadBy": {},
+      "history": []
+    },
+    {
+      "id": "t4",
+      "title": "ERP系统集成测试",
+      "segment": "京瓷",
+      "progress": "测试用例全部通过，覆盖率85%",
+      "tags": [
+        "测试"
+      ],
+      "assignees": [
+        "u1"
+      ],
+      "clientId": "c2",
+      "dueDate": "2026-08-05",
+      "completedDate": "2026-08-04",
+      "createdAt": "2026-07-28T10:00:00",
+      "createdBy": "u3",
+      "comments": [
+        {
+          "id": "c4",
+          "userId": "u1",
+          "text": "测试完成，报告已发送",
+          "time": "2026-08-04T17:00:00"
+        }
+      ],
+      "status": "done",
+      "firstViewedBy": {
+        "u1": "2026-07-29T10:00:00"
+      },
+      "commentReadBy": {},
+      "history": []
+    },
+    {
+      "id": "t5",
+      "title": "财务报表模块开发",
+      "segment": "长春欧摩威",
+      "progress": "待启动",
+      "tags": [
+        "后端",
+        "财务"
+      ],
+      "assignees": [
+        "u1"
+      ],
+      "clientId": "c8",
+      "dueDate": "2026-08-25",
+      "completedDate": "",
+      "createdAt": "2026-08-07T11:00:00",
+      "createdBy": "u3",
+      "comments": [],
+      "status": "todo",
+      "firstViewedBy": {},
+      "commentReadBy": {},
+      "history": []
+    },
+    {
+      "id": "t6",
+      "title": "移动端H5页面适配",
+      "segment": "墨西哥欧摩威",
+      "progress": "正在适配主要页面，已完成60%",
+      "tags": [
+        "前端",
+        "移动端"
+      ],
+      "assignees": [
+        "u2"
+      ],
+      "clientId": "c8",
+      "dueDate": "2026-08-05",
+      "completedDate": "",
+      "createdAt": "2026-08-03T15:00:00",
+      "createdBy": "u3",
+      "comments": [],
+      "status": "overdue",
+      "firstViewedBy": {
+        "u2": "2026-08-04T10:00:00"
+      },
+      "commentReadBy": {},
+      "history": []
+    },
+    {
+      "id": "t7",
+      "title": "环保监测小程序设计",
+      "segment": "泰德兴",
+      "progress": "待开始设计",
+      "tags": [
+        "设计",
+        "小程序"
+      ],
+      "assignees": [
+        "u1"
+      ],
+      "clientId": "c3",
+      "dueDate": "2026-08-22",
+      "completedDate": "",
+      "createdAt": "2026-08-08T09:00:00",
+      "createdBy": "u3",
+      "comments": [],
+      "status": "todo",
+      "firstViewedBy": {},
+      "commentReadBy": {},
+      "history": []
+    },
+    {
+      "id": "t8",
+      "title": "IoT设备接入开发",
+      "segment": "泰德兴",
+      "progress": "MQTT协议对接中，传感器数据接入调试",
+      "tags": [
+        "后端",
+        "IoT"
+      ],
+      "assignees": [
+        "u2"
+      ],
+      "clientId": "c3",
+      "dueDate": "2026-07-30",
+      "completedDate": "2026-08-02",
+      "createdAt": "2026-07-15T10:00:00",
+      "createdBy": "u3",
+      "comments": [],
+      "status": "done",
+      "firstViewedBy": {
+        "u2": "2026-07-16T10:00:00"
+      },
+      "commentReadBy": {},
+      "history": []
+    }
+  ],
+  "members": [
+    {
+      "id": "u1",
+      "name": "邵杰",
+      "role": "组员",
+      "color": "#5b5fc7"
+    },
+    {
+      "id": "u2",
+      "name": "丁海燕",
+      "role": "组员",
+      "color": "#0ea5e9"
+    },
+    {
+      "id": "u3",
+      "name": "祁佳伟",
+      "role": "管理员",
+      "color": "#34c759"
+    }
+  ],
+  "clients": [
+    {
+      "id": "c1",
+      "name": "HELLA",
+      "color": "#5b5fc7"
+    },
+    {
+      "id": "c2",
+      "name": "京瓷",
+      "color": "#0ea5e9"
+    },
+    {
+      "id": "c3",
+      "name": "泰德兴",
+      "color": "#34c759"
+    },
+    {
+      "id": "c4",
+      "name": "BCS",
+      "color": "#ff9500"
+    },
+    {
+      "id": "c5",
+      "name": "共创科技",
+      "color": "#ff3b30"
+    },
+    {
+      "id": "c6",
+      "name": "浙江长江",
+      "color": "#af52de"
+    },
+    {
+      "id": "c7",
+      "name": "上海泽久",
+      "color": "#5b5fc7"
+    },
+    {
+      "id": "c8",
+      "name": "欧摩威",
+      "color": "#0ea5e9"
+    },
+    {
+      "id": "c9",
+      "name": "顺铨",
+      "color": "#34c759"
+    },
+    {
+      "id": "c10",
+      "name": "Merit",
+      "color": "#ff9500"
+    },
+    {
+      "id": "c11",
+      "name": "和硕",
+      "color": "#ff3b30"
+    },
+    {
+      "id": "c12",
+      "name": "恒润科技",
+      "color": "#af52de"
+    },
+    {
+      "id": "c13",
+      "name": "其他",
+      "color": "#a1a1a6"
+    }
+  ],
+  "permissions": {
+    "memberCanCreateTask": true,
+    "memberCanEditTask": true,
+    "memberCanEditDueDate": false,
+    "memberCanDeleteTask": false,
+    "memberCanToggleComplete": true,
+    "memberCanAddClient": false,
+    "memberCanEditClient": false,
+    "memberCanDeleteClient": false,
+    "memberCanExport": true,
+    "memberCanImport": false,
+    "memberCanComment": true,
+    "memberCanDeleteOwnComment": true
+  },
+  "notifications": [
+    {
+      "id": "n_mslf06pcbfm6a",
+      "type": "status",
+      "taskId": "t1",
+      "text": "祁佳伟 将任务「官网首页改版设计」标记为已完成",
+      "time": "2026-08-09T06:21:48.144Z",
+      "read": false,
+      "userId": "u1"
+    },
+    {
+      "id": "n_mslf06oq8975d",
+      "type": "status",
+      "taskId": "t1",
+      "text": "祁佳伟 将任务「官网首页改版设计」标记为已完成",
+      "time": "2026-08-09T06:21:48.122Z",
+      "read": false,
+      "userId": "u2"
+    },
+    {
+      "id": "n1",
+      "type": "task",
+      "taskId": "t1",
+      "text": "祁佳伟 指派了任务「官网首页改版设计」给你",
+      "time": "2026-08-05T10:30:00",
+      "read": false,
+      "userId": "u2"
+    },
+    {
+      "id": "n2",
+      "type": "status",
+      "taskId": "t3",
+      "text": "丁海燕 将任务「数据看板前端开发」标记为已完成",
+      "time": "2026-08-07T16:30:00",
+      "read": false,
+      "userId": "u3"
+    },
+    {
+      "id": "n3",
+      "type": "comment",
+      "taskId": "t1",
+      "text": "丁海燕 评论了「官网首页改版设计」",
+      "time": "2026-08-05T14:20:00",
+      "read": true,
+      "userId": "u3"
+    }
+  ]
+}
