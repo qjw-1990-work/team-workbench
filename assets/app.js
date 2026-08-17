@@ -1,6 +1,9 @@
-// ==================== 数据存储层（本地存储 + 静态数据） ====================
-// GitHub Pages 静态部署版：数据从静态 JSON 文件加载，修改保存到 localStorage
+// ==================== 数据存储层（MantleDB 云端同步 + 本地缓存） ====================
+// 使用 MantleDB (mantledb.sh) 作为云端 JSON 存储，支持跨电脑同步
+// 免费无需账号，数据持久保存；localStorage 作为本地缓存加速
 const STORAGE_KEY = 'team_workbench_user';
+const CLOUD_BASE = 'https://mantledb.sh/v2/team-workbench-qjw';
+const CLOUD_DATA_PATH = CLOUD_BASE + '/data';
 const STATIC_DATA_PATH = 'data/shared-data.json';
 const LOCAL_DATA_KEY = 'team_workbench_local_data';
 
@@ -17,7 +20,7 @@ function apiFetch(url, options = {}) {
   });
 }
 
-// 从 localStorage 加载本地修改的数据
+// 从 localStorage 加载本地缓存
 function loadLocalData() {
   try {
     const raw = localStorage.getItem(LOCAL_DATA_KEY);
@@ -28,12 +31,12 @@ function loadLocalData() {
       }
     }
   } catch (e) {
-    console.warn('读取本地数据失败:', e);
+    console.warn('读取本地缓存失败:', e);
   }
   return null;
 }
 
-// 保存数据到 localStorage
+// 保存数据到 localStorage 缓存
 function saveLocalData(d) {
   try {
     const toSave = {
@@ -46,7 +49,7 @@ function saveLocalData(d) {
     };
     localStorage.setItem(LOCAL_DATA_KEY, JSON.stringify(toSave));
   } catch (e) {
-    console.warn('保存本地数据失败:', e);
+    console.warn('保存本地缓存失败:', e);
   }
 }
 
@@ -111,7 +114,45 @@ function makeSnapshot(d) {
 // 从服务器并行加载所有分片（带重试，不回退到虚拟数据）
 // 优化：只加载 meta.chunkIds 中有数据的分片，减少 API 调用避免 429 限流
 async function loadData() {
-  // 优先从 localStorage 加载（用户修改过的数据）
+  const MAX_RETRIES = 2;
+  const RETRY_DELAY = 1500;
+
+  // 1. 优先从 MantleDB 云端加载（跨电脑同步的关键）
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const res = await apiFetch(CLOUD_DATA_PATH);
+      if (!res.ok) throw new Error(`云端不可用: ${res.status}`);
+      const serverData = await res.json();
+      if (!serverData.members && !serverData.clients && !serverData.tasks) {
+        throw new Error('云端数据为空');
+      }
+      const parsed = {
+        tasks: serverData.tasks || [],
+        members: serverData.members || [],
+        clients: serverData.clients || [],
+        permissions: serverData.permissions || JSON.parse(JSON.stringify(defaultPermissions)),
+        notifications: serverData.notifications || [],
+      };
+      normalizeData(parsed);
+      parsed.currentUserId = getCurrentUserId();
+      if (!parsed.collapsedClients) parsed.collapsedClients = [];
+      lastSyncTime = Date.now();
+      lastDataSnapshot = makeSnapshot(parsed);
+      lastMetaSnapshot = JSON.stringify({
+        members: parsed.members, clients: parsed.clients,
+        notifications: parsed.notifications, taskCount: parsed.tasks.length,
+      });
+      serverDataLoaded = true;
+      saveLocalData(parsed); // 同步到本地缓存
+      console.log(`从云端加载数据: ${parsed.tasks.length} 条任务`);
+      return parsed;
+    } catch (e) {
+      console.warn(`云端加载失败 (${attempt}/${MAX_RETRIES}):`, e.message);
+      if (attempt < MAX_RETRIES) await new Promise(r => setTimeout(r, RETRY_DELAY));
+    }
+  }
+
+  // 2. 云端不可用时，从 localStorage 缓存加载
   const localData = loadLocalData();
   if (localData) {
     const parsed = {
@@ -127,11 +168,11 @@ async function loadData() {
     lastSyncTime = Date.now();
     lastDataSnapshot = makeSnapshot(parsed);
     serverDataLoaded = true;
-    console.log(`从本地存储加载数据: ${parsed.tasks.length} 条任务`);
+    console.log(`从本地缓存加载数据: ${parsed.tasks.length} 条任务`);
     return parsed;
   }
 
-  // 从静态 JSON 文件加载初始数据
+  // 3. 从静态 JSON 文件加载初始数据
   try {
     const res = await fetch(STATIC_DATA_PATH);
     if (res.ok) {
@@ -155,10 +196,10 @@ async function loadData() {
       }
     }
   } catch (e) {
-    console.warn('静态数据加载失败，使用默认数据:', e.message);
+    console.warn('静态数据加载失败:', e.message);
   }
 
-  // 使用默认数据
+  // 4. 兜底默认数据
   const fallback = {
     tasks: defaultData.tasks || [],
     members: defaultData.members,
@@ -174,7 +215,7 @@ async function loadData() {
   return fallback;
 }
 
-// 保存数据到本地存储（静态部署版）
+// 保存数据到云端 + 本地缓存
 function saveData() {
   if (!serverDataLoaded) {
     console.warn('数据未加载完成，跳过保存');
@@ -192,30 +233,93 @@ async function saveDataInternal() {
   setCurrentUserId(data.currentUserId);
   if (isSaving) {
     if (!saveTimer) {
-      saveTimer = setTimeout(() => {
-        saveTimer = null;
-        saveDataInternal();
-      }, 500);
+      saveTimer = setTimeout(() => { saveTimer = null; saveDataInternal(); }, 500);
     }
     return;
   }
   isSaving = true;
   try {
+    // 1. 先保存到本地缓存（快速、可靠）
     saveLocalData(data);
-    lastDataSnapshot = makeSnapshot(data);
-    console.log('数据已保存到本地存储');
+
+    // 2. 保存到 MantleDB 云端（跨电脑同步）
+    const syncData = JSON.parse(JSON.stringify(data));
+    delete syncData.currentUserId;
+    delete syncData.collapsedClients;
+
+    const saveRes = await apiFetch(CLOUD_DATA_PATH, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(syncData),
+    });
+
+    if (saveRes.ok) {
+      lastSyncTime = Date.now();
+      lastDataSnapshot = makeSnapshot(syncData);
+      lastMetaSnapshot = JSON.stringify({
+        members: syncData.members, clients: syncData.clients,
+        notifications: syncData.notifications, taskCount: syncData.tasks.length,
+      });
+      deletedTaskIds.clear();
+      console.log(`数据已保存到云端: ${syncData.tasks.length} 条任务`);
+    } else {
+      console.warn(`云端保存失败 (${saveRes.status})，数据已保存在本地缓存`);
+    }
   } catch (e) {
-    console.error('保存数据失败:', e);
+    console.error('云端保存异常:', e.message);
+  } finally {
+    isSaving = false;
   }
-  isSaving = false;
 }
 
-// 轮询同步：静态部署版不需要云端同步，仅作占位
+// 轮询云端同步：检查其他设备的修改
 let lastDataSnapshot = '';
 let lastMetaSnapshot = '';
 async function pollSync() {
-  // 静态部署版不需要云端轮询同步
-  return;
+  if (!serverDataLoaded) return;
+  if (isSaving) return;
+  if (saveTimer) return;
+  if (document.querySelector('.modal.show')) return;
+  try {
+    const res = await apiFetch(CLOUD_DATA_PATH);
+    if (!res.ok) return;
+    const serverData = await res.json();
+    if (!serverData.members && !serverData.clients && !serverData.tasks) return;
+
+    const parsed = {
+      tasks: serverData.tasks || [],
+      members: serverData.members || [],
+      clients: serverData.clients || [],
+      permissions: serverData.permissions || JSON.parse(JSON.stringify(defaultPermissions)),
+      notifications: serverData.notifications || [],
+    };
+    normalizeData(parsed);
+
+    const metaSnapshot = JSON.stringify({
+      members: parsed.members, clients: parsed.clients,
+      notifications: parsed.notifications, taskCount: parsed.tasks.length,
+    });
+    if (lastMetaSnapshot && metaSnapshot === lastMetaSnapshot) return;
+    lastMetaSnapshot = metaSnapshot;
+
+    const snapshot = makeSnapshot(parsed);
+    if (snapshot !== lastDataSnapshot) {
+      const currentUserId = data.currentUserId;
+      const collapsedClients = data.collapsedClients;
+      data = parsed;
+      data.currentUserId = currentUserId;
+      data.collapsedClients = collapsedClients || [];
+      lastDataSnapshot = snapshot;
+      saveLocalData(data); // 同步到本地缓存
+      syncTaskStatuses();
+      renderAll();
+      console.log('检测到云端数据更新，已同步');
+    } else {
+      lastDataSnapshot = snapshot;
+    }
+  } catch (e) {
+    // 静默失败
+  }
 }
 
 // ==================== 权限设置 ====================
