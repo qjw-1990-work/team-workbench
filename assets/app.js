@@ -915,17 +915,26 @@ function getTaskStatus(task) {
   // 已完成：完成日期已填写
   if (task.completedDate) return 'done';
 
-  // 待办：仅对当前登录用户显示
-  // 条件：当前用户是受让人之一、当前用户不是创建者、当前用户尚未查看过此任务
-  // 这样每个受让人只能看到分配给自己的未读任务为"待办"
   const currentUserId = data ? data.currentUserId : getCurrentUserId();
-  if (task.createdBy && task.assignees &&
-      task.assignees.length > 0 &&
-      task.assignees.includes(currentUserId) &&
-      currentUserId !== task.createdBy) {
+
+  // 待办：当责任人尚未点击过此任务时，所有人都看到"待办"
+  // 不管是管理员还是组员，只要对应的责任人没点过，就显示待办
+  if (task.createdBy && task.assignees && task.assignees.length > 0) {
     const viewedBy = task.firstViewedBy || {};
-    if (!viewedBy[currentUserId]) {
-      return 'todo';
+
+    if (task.assignees.includes(currentUserId)) {
+      // 当前登录用户是责任人之一：自己没点过 → 待办
+      if (!viewedBy[currentUserId]) {
+        return 'todo';
+      }
+    } else {
+      // 当前用户不是责任人（如管理员）：只要还有责任人没点过 → 待办
+      const anyNotViewed = task.assignees.some(function(aid) {
+        return !viewedBy[aid];
+      });
+      if (anyNotViewed) {
+        return 'todo';
+      }
     }
   }
 
@@ -1455,11 +1464,9 @@ function openDetail(taskId) {
   currentDetailTaskId = taskId;
 
   // 只有"责任人（组员）"点击任务时，才取消待办状态
-  // 管理员（创建者）点击不影响待办状态——目的是提醒组员是否有新任务派发
-  // 修复：使用 firstViewedBy 按用户记录查看时间，而非全局 firstViewedAt
+  // 管理员（创建者）如果不是责任人，点击不影响待办；如果是责任人，点击也取消待办
   let needsSave = false;
   if (task.createdBy && task.assignees &&
-      !task.assignees.includes(task.createdBy) &&
       task.assignees.includes(data.currentUserId)) {
     if (!task.firstViewedBy) task.firstViewedBy = {};
     if (!task.firstViewedBy[data.currentUserId]) {
