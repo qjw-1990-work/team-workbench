@@ -413,9 +413,40 @@ async function pollSync() {
 
     const currentUserId = data.currentUserId;
     const collapsedClients = data.collapsedClients;
+
+    // 保留本地最新的 commentReadBy 和 firstViewedBy（云端可能尚未同步）
+    const localTaskMeta = {};
+    data.tasks.forEach(function(t) {
+      localTaskMeta[t.id] = {
+        commentReadBy: t.commentReadBy ? JSON.parse(JSON.stringify(t.commentReadBy)) : {},
+        firstViewedBy: t.firstViewedBy ? JSON.parse(JSON.stringify(t.firstViewedBy)) : {},
+      };
+    });
+
     data = parsed;
     data.currentUserId = currentUserId;
     data.collapsedClients = collapsedClients || [];
+
+    // 合并本地最新的 commentReadBy（取最新时间戳）
+    data.tasks.forEach(function(t) {
+      var local = localTaskMeta[t.id];
+      if (!local) return;
+      if (!t.commentReadBy) t.commentReadBy = {};
+      Object.keys(local.commentReadBy).forEach(function(k) {
+        var localTime = local.commentReadBy[k];
+        var cloudTime = t.commentReadBy[k];
+        if (!cloudTime || new Date(localTime) > new Date(cloudTime)) {
+          t.commentReadBy[k] = localTime;
+        }
+      });
+      // 合并 firstViewedBy
+      if (!t.firstViewedBy) t.firstViewedBy = {};
+      Object.keys(local.firstViewedBy).forEach(function(k) {
+        if (!t.firstViewedBy[k]) {
+          t.firstViewedBy[k] = local.firstViewedBy[k];
+        }
+      });
+    });
     lastDataSnapshot = snapshot;
     saveLocalDataCache(data);
     syncTaskStatuses();
