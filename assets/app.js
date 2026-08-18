@@ -43,6 +43,7 @@ function saveLocalDataCache(d) {
       notifications: d.notifications || [],
       collapsedClients: d.collapsedClients || [],
       clientSegments: d.clientSegments || {},
+      columnWidths: d.columnWidths || getDefaultColumnWidths(),
     };
     localStorage.setItem(LOCAL_DATA_KEY, JSON.stringify(toSave));
   } catch (e) { console.warn('保存本地缓存失败:', e); }
@@ -64,6 +65,8 @@ let serverDataLoaded = false; // 标记是否已成功从服务器加载过数�
 let saveTimer = null; // 保存防抖计时器
 let deletedTaskIds = new Set(); // 跟踪本地删除的任务ID，防止合并时从服务器恢复
 let selectedTaskIds = new Set(); // 批量选择的任务ID
+let cloudVersion = null; // 云端数据版本号（用于乐观锁，防止并发覆盖）
+let columnWidthsSaveTimer = null; // 列宽保存独立防抖计时器（更短延迟）
 
 // 统一数据迁移函数
 function normalizeData(d) {
@@ -135,14 +138,13 @@ function getColumnWidthsGrid() {
   return cw.map(function(c) { return c.width; }).join(' ');
 }
 
-// 创建数据快照
+// 创建数据快照（不包含 columnWidths，因为列宽由独立机制管理）
 function makeSnapshot(d) {
   return JSON.stringify({
     tasks: d.tasks,
     clients: d.clients,
     members: d.members,
     notifications: d.notifications,
-    columnWidths: d.columnWidths,
     clientSegments: d.clientSegments,
   });
 }
@@ -164,6 +166,7 @@ async function loadData() {
           permissions: cloudData.permissions || JSON.parse(JSON.stringify(defaultPermissions)),
           notifications: cloudData.notifications || [],
           clientSegments: cloudData.clientSegments || JSON.parse(JSON.stringify(defaultClientSegments)),
+          columnWidths: cloudData.columnWidths || getDefaultColumnWidths(),
         };
         normalizeData(parsed);
         parsed.currentUserId = getCurrentUserId();
@@ -192,6 +195,7 @@ async function loadData() {
       permissions: localData.permissions || JSON.parse(JSON.stringify(defaultPermissions)),
       notifications: localData.notifications || [],
       clientSegments: localData.clientSegments || JSON.parse(JSON.stringify(defaultClientSegments)),
+      columnWidths: localData.columnWidths || getDefaultColumnWidths(),
     };
     normalizeData(parsed);
     parsed.currentUserId = getCurrentUserId();
@@ -213,6 +217,7 @@ async function loadData() {
     permissions: JSON.parse(JSON.stringify(defaultPermissions)),
     notifications: [],
     clientSegments: JSON.parse(JSON.stringify(defaultClientSegments)),
+    columnWidths: getDefaultColumnWidths(),
   };
   normalizeData(fallback);
   fallback.currentUserId = getCurrentUserId();
@@ -283,6 +288,149 @@ function saveData() {
   }, 500);
 }
 
+// 智能合并云端增量数据到 syncData（提取为独立函数，方便重试）
+function mergeCloudIntoLocal(cloudData, syncData) {
+  var merged = false;
+  if (!cloudData || !cloudData.tasks) return merged;
+
+  var localTaskMap = {};
+  syncData.tasks.forEach(function(t) { localTaskMap[t.id] = t; });
+  var cloudTaskMap = {};
+  cloudData.tasks.forEach(function(ct) { cloudTaskMap[ct.id] = ct; });
+
+  // 1. 补充云端独有的任务（其他设备新增的）
+  cloudData.tasks.forEach(function(ct) {
+    if (!localTaskMap[ct.id] && !deletedTaskIds.has(ct.id)) {
+      syncData.tasks.push(ct);
+      merged = true;
+    }
+  });
+
+  // 2. 智能合并：对于两边都有的任务，保留本地修改的字段，同时合并云端新增的内容
+  syncData.tasks.forEach(function(lt) {
+    var ct = cloudTaskMap[lt.id];
+    if (!ct) return;
+    var taskChanged = false;
+
+    // 2a. 合并 firstViewedBy：保留所有已查看记录（取并集）
+    if (ct.firstViewedBy) {
+      if (!lt.firstViewedBy) lt.firstViewedBy = {};
+      Object.keys(ct.firstViewedBy).forEach(function(k) {
+        if (!lt.firstViewedBy[k]) {
+          lt.firstViewedBy[k] = ct.firstViewedBy[k];
+          taskChanged = true;
+        }
+      });
+    }
+
+    // 2b. 合并 comments：保留所有评论（按 id 去重，取并集）
+    if (ct.comments && ct.comments.length > 0) {
+      if (!lt.comments) lt.comments = [];
+      var localCommentIds = {};
+      lt.comments.forEach(function(c) { localCommentIds[c.id] = true; });
+      ct.comments.forEach(function(cc) {
+        if (!localCommentIds[cc.id]) {
+          lt.comments.push(cc);
+          taskChanged = true;
+        }
+      });
+    }
+
+    // 2c. 合并 commentReadBy：保留所有已读记录（取并集）
+    if (ct.commentReadBy) {
+      if (!lt.commentReadBy) lt.commentReadBy = {};
+      Object.keys(ct.commentReadBy).forEach(function(k) {
+        if (!lt.commentReadBy[k]) {
+          lt.commentReadBy[k] = ct.commentReadBy[k];
+          taskChanged = true;
+        }
+      });
+    }
+
+    // 2d. 合并 lastReadAt：保留所有已读记录（取并集）
+    if (ct.lastReadAt) {
+      if (!lt.lastReadAt) lt.lastReadAt = {};
+      Object.keys(ct.lastReadAt).forEach(function(k) {
+        if (!lt.lastReadAt[k]) {
+          lt.lastReadAt[k] = ct.lastReadAt[k];
+          taskChanged = true;
+        }
+      });
+    }
+
+    // 2e. 合并 history：保留所有历史记录（按 id 去重，取并集）
+    if (ct.history && ct.history.length > 0) {
+      if (!lt.history) lt.history = [];
+      var localHistoryIds = {};
+      lt.history.forEach(function(h) { localHistoryIds[h.id] = true; });
+      ct.history.forEach(function(ch) {
+        if (!localHistoryIds[ch.id]) {
+          lt.history.push(ch);
+          taskChanged = true;
+        }
+      });
+    }
+
+    // 2f. 合并 lastActivityAt/lastActivityBy：取最新的（用于红点提示）
+    if (ct.lastActivityAt && (!lt.lastActivityAt || new Date(ct.lastActivityAt) > new Date(lt.lastActivityAt))) {
+      lt.lastActivityAt = ct.lastActivityAt;
+      lt.lastActivityBy = ct.lastActivityBy;
+      taskChanged = true;
+    }
+
+    if (taskChanged) merged = true;
+  });
+
+  // 3. 合并云端通知：本地没有的云端通知，补充到本地
+  if (cloudData.notifications && cloudData.notifications.length > 0) {
+    var localNotifIds = {};
+    syncData.notifications.forEach(function(n) { localNotifIds[n.id] = true; });
+    cloudData.notifications.forEach(function(cn) {
+      if (!localNotifIds[cn.id]) {
+        syncData.notifications.push(cn);
+        merged = true;
+      }
+    });
+  }
+
+  // 4. 合并云端 members（防止本地 members 为空或过期）
+  if (cloudData.members && cloudData.members.length > 0) {
+    if (!syncData.members || syncData.members.length === 0) {
+      syncData.members = cloudData.members;
+      merged = true;
+    } else {
+      // 合并云端独有的成员
+      var localMemberIds = {};
+      syncData.members.forEach(function(m) { localMemberIds[m.id] = true; });
+      cloudData.members.forEach(function(cm) {
+        if (!localMemberIds[cm.id]) {
+          syncData.members.push(cm);
+          merged = true;
+        }
+      });
+    }
+  }
+
+  // 5. 合并云端 clients（防止本地 clients 为空或过期）
+  if (cloudData.clients && cloudData.clients.length > 0) {
+    if (!syncData.clients || syncData.clients.length === 0) {
+      syncData.clients = cloudData.clients;
+      merged = true;
+    } else {
+      var localClientIds = {};
+      syncData.clients.forEach(function(c) { localClientIds[c.id] = true; });
+      cloudData.clients.forEach(function(cc) {
+        if (!localClientIds[cc.id]) {
+          syncData.clients.push(cc);
+          merged = true;
+        }
+      });
+    }
+  }
+
+  return merged;
+}
+
 async function saveDataInternal() {
   if (!data) return;
   setCurrentUserId(data.currentUserId);
@@ -297,101 +445,21 @@ async function saveDataInternal() {
     // 1. 先保存到本地缓存（快速、可靠）
     saveLocalDataCache(data);
 
-    // 2. 保存前检查云端：如果云端任务数 > 本地任务数，说明本地数据已过期，先合并云端数据
-    // 这防止其他设备的修改被本地 stale 数据覆盖
+    // 2. 创建待保存的数据快照
     var syncData = JSON.parse(JSON.stringify(data));
     delete syncData.currentUserId;
     delete syncData.collapsedClients;
+
+    // 3. 第一次预检查：合并云端增量数据
     try {
       var preCheck = await apiFetch(CLOUD_DATA_PATH);
       if (preCheck.ok) {
         var cloudPre = await preCheck.json();
         if (cloudPre && cloudPre.tasks) {
-          var localTaskMap = {};
-          syncData.tasks.forEach(function(t) { localTaskMap[t.id] = t; });
-          var cloudTaskMap = {};
-          cloudPre.tasks.forEach(function(ct) { cloudTaskMap[ct.id] = ct; });
-          var merged = false;
-
-          // 1. 补充云端独有的任务（其他设备新增的）
-          cloudPre.tasks.forEach(function(ct) {
-            if (!localTaskMap[ct.id] && !deletedTaskIds.has(ct.id)) {
-              syncData.tasks.push(ct);
-              merged = true;
-            }
-          });
-
-          // 2. 智能合并：对于两边都有的任务，保留本地修改的字段，同时合并云端新增的内容
-          syncData.tasks.forEach(function(lt, idx) {
-            var ct = cloudTaskMap[lt.id];
-            if (!ct) return;
-            // 比较云端版本，合并云端独有的增量数据
-            var taskChanged = false;
-
-            // 2a. 合并 firstViewedBy：保留所有已查看记录（取并集）
-            if (ct.firstViewedBy) {
-              if (!lt.firstViewedBy) lt.firstViewedBy = {};
-              Object.keys(ct.firstViewedBy).forEach(function(k) {
-                if (!lt.firstViewedBy[k]) {
-                  lt.firstViewedBy[k] = ct.firstViewedBy[k];
-                  taskChanged = true;
-                }
-              });
-            }
-
-            // 2b. 合并 comments：保留所有评论（按 id 去重）
-            if (ct.comments && ct.comments.length > 0) {
-              if (!lt.comments) lt.comments = [];
-              var localCommentIds = {};
-              lt.comments.forEach(function(c) { localCommentIds[c.id] = true; });
-              ct.comments.forEach(function(cc) {
-                if (!localCommentIds[cc.id]) {
-                  lt.comments.push(cc);
-                  taskChanged = true;
-                }
-              });
-            }
-
-            // 2c. 合并 commentReadBy：保留所有已读记录（取并集）
-            if (ct.commentReadBy) {
-              if (!lt.commentReadBy) lt.commentReadBy = {};
-              Object.keys(ct.commentReadBy).forEach(function(k) {
-                if (!lt.commentReadBy[k]) {
-                  lt.commentReadBy[k] = ct.commentReadBy[k];
-                  taskChanged = true;
-                }
-              });
-            }
-
-            // 2c2. 合并 lastReadAt：保留所有已读记录（取并集）
-            if (ct.lastReadAt) {
-              if (!lt.lastReadAt) lt.lastReadAt = {};
-              Object.keys(ct.lastReadAt).forEach(function(k) {
-                if (!lt.lastReadAt[k]) {
-                  lt.lastReadAt[k] = ct.lastReadAt[k];
-                  taskChanged = true;
-                }
-              });
-            }
-
-            // 2d. 合并 history：保留所有历史记录（按 id 去重，取并集）
-            if (ct.history && ct.history.length > 0) {
-              if (!lt.history) lt.history = [];
-              var localHistoryIds = {};
-              lt.history.forEach(function(h) { localHistoryIds[h.id] = true; });
-              ct.history.forEach(function(ch) {
-                if (!localHistoryIds[ch.id]) {
-                  lt.history.push(ch);
-                  taskChanged = true;
-                }
-              });
-            }
-
-            if (taskChanged) merged = true;
-          });
-
+          var merged = mergeCloudIntoLocal(cloudPre, syncData);
           if (merged) {
             data.tasks = syncData.tasks.slice();
+            if (cloudPre.notifications) data.notifications = syncData.notifications.slice();
             saveLocalDataCache(data);
             console.log('保存前智能合并云端增量数据');
           }
@@ -401,20 +469,79 @@ async function saveDataInternal() {
       console.warn('保存前云端检查失败:', e.message);
     }
 
-    const saveRes = await apiFetch(CLOUD_DATA_PATH, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(syncData),
-    });
+    // 4. 第二次预检查（紧贴 POST）：检测并发修改，如果云端在第一次检查后被修改，重新合并
+    var retryCount = 0;
+    var maxRetries = 3;
+    var saveSuccess = false;
 
-    if (saveRes.ok) {
-      lastSyncTime = Date.now();
-      lastLocalSaveTime = Date.now(); // 记录本地保存时间，用于 pollSync 保护窗口
-      lastDataSnapshot = makeSnapshot(syncData);
-      deletedTaskIds.clear();
-      console.log(`保存完成: ${syncData.tasks.length} 条任务`);
-    } else {
-      console.error(`云端保存失败: ${saveRes.status}`);
+    while (retryCount < maxRetries && !saveSuccess) {
+      try {
+        var preCheck2 = await apiFetch(CLOUD_DATA_PATH);
+        if (preCheck2.ok) {
+          var cloudPre2 = await preCheck2.json();
+          if (cloudPre2 && cloudPre2.tasks) {
+            // 检查云端是否有我们在第一次合并后错过的新数据
+            var localTaskMap2 = {};
+            syncData.tasks.forEach(function(t) { localTaskMap2[t.id] = t; });
+            var hasNewCloudData = false;
+            cloudPre2.tasks.forEach(function(ct) {
+              if (!localTaskMap2[ct.id] && !deletedTaskIds.has(ct.id)) {
+                hasNewCloudData = true;
+              }
+            });
+            // 也检查通知
+            if (!hasNewCloudData && cloudPre2.notifications) {
+              var localNotifIds2 = {};
+              syncData.notifications.forEach(function(n) { localNotifIds2[n.id] = true; });
+              cloudPre2.notifications.forEach(function(cn) {
+                if (!localNotifIds2[cn.id]) hasNewCloudData = true;
+              });
+            }
+
+            if (hasNewCloudData && retryCount < maxRetries - 1) {
+              // 云端有我们没合并的新数据，重新合并
+              var remerged = mergeCloudIntoLocal(cloudPre2, syncData);
+              if (remerged) {
+                data.tasks = syncData.tasks.slice();
+                if (cloudPre2.notifications) data.notifications = syncData.notifications.slice();
+                saveLocalDataCache(data);
+                console.log('第二次预检查发现新数据，重新合并 (重试 ' + (retryCount + 1) + ')');
+              }
+              retryCount++;
+              continue;
+            }
+          }
+        }
+      } catch (e) {
+        console.warn('第二次预检查失败:', e.message);
+      }
+
+      // 5. 执行保存
+      var saveRes = await apiFetch(CLOUD_DATA_PATH, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(syncData),
+      });
+
+      if (saveRes.ok) {
+        lastSyncTime = Date.now();
+        lastLocalSaveTime = Date.now();
+        lastDataSnapshot = makeSnapshot(syncData);
+        deletedTaskIds.clear();
+        saveSuccess = true;
+        console.log('保存完成: ' + syncData.tasks.length + ' 条任务');
+      } else {
+        console.error('云端保存失败: ' + saveRes.status);
+        retryCount++;
+        if (retryCount < maxRetries) {
+          console.log('保存失败，重试 ' + retryCount + '/' + maxRetries);
+          await new Promise(function(r) { setTimeout(r, 300); });
+        }
+      }
+    }
+
+    if (!saveSuccess) {
+      console.error('保存最终失败，数据仅保存在本地缓存');
     }
   } catch (e) {
     console.error('保存失败:', e);
@@ -426,7 +553,7 @@ async function saveDataInternal() {
 // 轮询同步：从云端拉取最新数据，带本地保存保护
 let lastDataSnapshot = '';
 let lastLocalSaveTime = 0; // 本地最近一次保存的时间戳
-const SAVE_GUARD_WINDOW = 8000; // 保存后 8 秒内，pollSync 不会用云端数据覆盖本地（防止云端写入延迟导致回退）
+const SAVE_GUARD_WINDOW = 3000; // 保存后 3 秒内保护窗口（降低到 3 秒，减少同步延迟）
 
 async function pollSync() {
   if (!serverDataLoaded) return;
@@ -444,6 +571,9 @@ async function pollSync() {
       return;
     }
 
+    // 优先使用本地列宽（本地列宽是当前用户的金标准），云端列宽仅作兜底
+    var cloudColumnWidths = serverData.columnWidths || getDefaultColumnWidths();
+
     const parsed = {
       tasks: serverData.tasks || [],
       members: serverData.members || [],
@@ -451,24 +581,26 @@ async function pollSync() {
       permissions: serverData.permissions || JSON.parse(JSON.stringify(defaultPermissions)),
       notifications: serverData.notifications || [],
       clientSegments: serverData.clientSegments || JSON.parse(JSON.stringify(defaultClientSegments)),
+      columnWidths: cloudColumnWidths,
     };
     normalizeData(parsed);
 
     const snapshot = makeSnapshot(parsed);
     if (snapshot === lastDataSnapshot) return; // 数据无变化，跳过
 
-    // 保存保护：如果本地最近刚保存过，且云端任务数与本地不一致，说明云端数据可能尚未同步完成
-    // 此时拒绝用云端数据覆盖本地，防止任务消失或恢复
+    // 保存保护：如果本地最近刚保存过，且云端任务数少于本地，说明云端数据可能尚未同步完成
     const now = Date.now();
     const localTaskCount = (data && data.tasks) ? data.tasks.length : 0;
     const cloudTaskCount = parsed.tasks.length;
-    if (now - lastLocalSaveTime < SAVE_GUARD_WINDOW && cloudTaskCount !== localTaskCount) {
-      console.warn(`pollSync: 保存保护窗口内，云端任务(${cloudTaskCount})与本地(${localTaskCount})不一致，跳过同步`);
+    if (now - lastLocalSaveTime < SAVE_GUARD_WINDOW && cloudTaskCount < localTaskCount) {
+      console.warn('pollSync: 保存保护窗口内，云端任务(' + cloudTaskCount + ')少于本地(' + localTaskCount + ')，跳过同步');
       return;
     }
 
     const currentUserId = data.currentUserId;
     const collapsedClients = data.collapsedClients;
+    // 始终保留本地列宽设置（列宽是纯 UI 设置，本地为准）
+    const localColumnWidths = data.columnWidths;
 
     // 保留本地最新的 commentReadBy、lastReadAt 和 firstViewedBy（云端可能尚未同步）
     const localTaskMeta = {};
@@ -483,6 +615,10 @@ async function pollSync() {
     data = parsed;
     data.currentUserId = currentUserId;
     data.collapsedClients = collapsedClients || [];
+    // 始终使用本地列宽（本地列宽优先级最高，不会被云端覆盖）
+    if (localColumnWidths) {
+      data.columnWidths = localColumnWidths;
+    }
 
     // 合并本地最新的 commentReadBy（取最新时间戳）
     data.tasks.forEach(function(t) {
@@ -517,7 +653,7 @@ async function pollSync() {
     saveLocalDataCache(data);
     syncTaskStatuses();
     renderAll();
-    console.log(`pollSync: 云端数据已同步 (${cloudTaskCount} 条任务)`);
+    console.log('pollSync: 云端数据已同步 (' + cloudTaskCount + ' 条任务)');
   } catch (e) {
     // 静默失败
   }
@@ -2818,9 +2954,43 @@ function onColumnResizeUp(e) {
   document.body.style.cursor = '';
   document.body.style.userSelect = '';
   if (resizeState) {
-    saveData();
+    // 立即保存列宽到本地缓存和云端（独立防抖，200ms，避免被主 saveData 的 500ms 延迟影响）
+    saveColumnWidths();
     resizeState = null;
   }
+}
+
+// 列宽独立保存：短防抖 + 立即同步到云端（不等待主数据保存）
+function saveColumnWidths() {
+  if (!data || !data.columnWidths) return;
+  saveLocalDataCache(data);
+  if (columnWidthsSaveTimer) clearTimeout(columnWidthsSaveTimer);
+  columnWidthsSaveTimer = setTimeout(function() {
+    columnWidthsSaveTimer = null;
+    saveColumnWidthsToCloud();
+  }, 200);
+}
+
+async function saveColumnWidthsToCloud() {
+  if (!data || !data.columnWidths) return;
+  try {
+    // 尝试保存到独立的列宽端点（快速）
+    var cwPayload = { columnWidths: data.columnWidths };
+    var saveRes = await apiFetch(CLOUD_DATA_PATH + '/columnWidths', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(cwPayload),
+    });
+    if (saveRes.ok) {
+      console.log('列宽已同步到云端（独立端点）');
+      return;
+    }
+  } catch (e) {
+    // 独立端点失败，回退到主数据保存
+    console.warn('列宽独立端点保存失败，回退到主数据保存:', e.message);
+  }
+  // 回退：通过主数据端点保存（确保列宽能被其他用户看到）
+  saveData();
 }
 
 // ==================== 客户细分管理面板（仅管理员） ====================
