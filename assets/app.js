@@ -88,6 +88,19 @@ function normalizeData(d) {
     if (!t.completedDate) t.completedDate = '';
     if (!t.commentReadBy) t.commentReadBy = {};
     if (!t.history) t.history = [];
+    // 活动红点：lastActivityAt/lastActivityBy 记录最近一次进展更新/评论的时间和人
+    if (!t.lastActivityAt) t.lastActivityAt = null;
+    if (!t.lastActivityBy) t.lastActivityBy = null;
+    // lastReadAt：每个用户最后一次查看任务详情的时间
+    if (!t.lastReadAt) {
+      // 从旧 commentReadBy 迁移，取最大值
+      t.lastReadAt = {};
+      if (t.commentReadBy) {
+        Object.keys(t.commentReadBy).forEach(function(k) {
+          t.lastReadAt[k] = t.commentReadBy[k];
+        });
+      }
+    }
     delete t.desc; delete t.priority;
   });
   if (!d.clients) d.clients = [];
@@ -350,6 +363,17 @@ async function saveDataInternal() {
               });
             }
 
+            // 2c2. 合并 lastReadAt：保留所有已读记录（取并集）
+            if (ct.lastReadAt) {
+              if (!lt.lastReadAt) lt.lastReadAt = {};
+              Object.keys(ct.lastReadAt).forEach(function(k) {
+                if (!lt.lastReadAt[k]) {
+                  lt.lastReadAt[k] = ct.lastReadAt[k];
+                  taskChanged = true;
+                }
+              });
+            }
+
             // 2d. 合并 history：保留所有历史记录（按 id 去重，取并集）
             if (ct.history && ct.history.length > 0) {
               if (!lt.history) lt.history = [];
@@ -446,11 +470,12 @@ async function pollSync() {
     const currentUserId = data.currentUserId;
     const collapsedClients = data.collapsedClients;
 
-    // 保留本地最新的 commentReadBy 和 firstViewedBy（云端可能尚未同步）
+    // 保留本地最新的 commentReadBy、lastReadAt 和 firstViewedBy（云端可能尚未同步）
     const localTaskMeta = {};
     data.tasks.forEach(function(t) {
       localTaskMeta[t.id] = {
         commentReadBy: t.commentReadBy ? JSON.parse(JSON.stringify(t.commentReadBy)) : {},
+        lastReadAt: t.lastReadAt ? JSON.parse(JSON.stringify(t.lastReadAt)) : {},
         firstViewedBy: t.firstViewedBy ? JSON.parse(JSON.stringify(t.firstViewedBy)) : {},
       };
     });
@@ -469,6 +494,15 @@ async function pollSync() {
         var cloudTime = t.commentReadBy[k];
         if (!cloudTime || new Date(localTime) > new Date(cloudTime)) {
           t.commentReadBy[k] = localTime;
+        }
+      });
+      // 合并 lastReadAt（取最新时间戳）
+      if (!t.lastReadAt) t.lastReadAt = {};
+      Object.keys(local.lastReadAt).forEach(function(k) {
+        var localTime = local.lastReadAt[k];
+        var cloudTime = t.lastReadAt[k];
+        if (!cloudTime || new Date(localTime) > new Date(cloudTime)) {
+          t.lastReadAt[k] = localTime;
         }
       });
       // 合并 firstViewedBy
@@ -566,26 +600,41 @@ function getCurrentUser() {
   return getMember(data.currentUserId) || data.members[0];
 }
 
-// 获取用户对某任务的未读评论数
-function getUnreadCommentCount(task, userId) {
-  if (!task.comments || task.comments.length === 0) return 0;
-  const readBy = task.commentReadBy || {};
-  const lastReadAt = readBy[userId];
-  if (!lastReadAt) {
-    // 从未查看过，所有非自己的评论都是未读
-    return task.comments.filter(c => c.userId !== userId).length;
-  }
-  const readTime = new Date(lastReadAt).getTime();
-  return task.comments.filter(c => {
-    if (c.userId === userId) return false; // 自己的评论不算未读
-    return new Date(c.time).getTime() > readTime;
-  }).length;
+// 获取用户对某任务的未读活动数（进展更新、评论等）
+// 只有"别人"的变更才算，自己的不算
+function getUnreadActivityCount(task, userId) {
+  if (!task.lastActivityAt || !task.lastActivityBy) return 0;
+  // 自己的变更不提醒自己
+  if (task.lastActivityBy === userId) return 0;
+  // 检查当前用户是否与任务相关（管理员、责任人、创建人）
+  if (!isUserRelatedToTask(task, userId)) return 0;
+  const readAt = (task.lastReadAt || {})[userId];
+  if (!readAt) return 1; // 从未查看过
+  return new Date(task.lastActivityAt).getTime() > new Date(readAt).getTime() ? 1 : 0;
 }
 
-// 标记当前用户已查看某任务的全部评论
-function markCommentsRead(task, userId) {
-  if (!task.commentReadBy) task.commentReadBy = {};
-  task.commentReadBy[userId] = new Date().toISOString();
+// 判断用户是否与任务相关
+function isUserRelatedToTask(task, userId) {
+  // 管理员
+  var m = getMember(userId);
+  if (m && m.role === '管理员') return true;
+  // 责任人
+  if (task.assignees && task.assignees.includes(userId)) return true;
+  // 创建人
+  if (task.createdBy === userId) return true;
+  return false;
+}
+
+// 标记当前用户已查看某任务的所有活动
+function markActivityRead(task, userId) {
+  if (!task.lastReadAt) task.lastReadAt = {};
+  task.lastReadAt[userId] = new Date().toISOString();
+}
+
+// 记录任务活动（进展更新或评论时调用）
+function recordTaskActivity(task, userId) {
+  task.lastActivityAt = new Date().toISOString();
+  task.lastActivityBy = userId;
 }
 
 function formatDate(dateStr) {
@@ -1223,8 +1272,7 @@ function renderTaskRow(task, clientId) {
   const overdue = status === 'overdue';
   const creator = getMember(task.createdBy);
   const createdDate = task.createdAt ? formatDate(task.createdAt) : '-';
-  const unreadCount = getUnreadCommentCount(task, data.currentUserId);
-  const totalComments = (task.comments || []).length;
+  const unreadCount = getUnreadActivityCount(task, data.currentUserId);
 
   return `
     <div class="task-row" data-task-id="${task.id}" style="grid-template-columns:${getColumnWidthsGrid()}">
@@ -1254,7 +1302,7 @@ function renderTaskRow(task, clientId) {
         ${task.assignees.length === 0 ? '<span style="color:var(--muted);font-size:11px">-</span>' : ''}
       </div>
       <div style="position:relative;display:flex;align-items:center;gap:6px">
-        ${unreadCount > 0 ? `<span class="comment-badge unread" title="${unreadCount} 条未读评论">${unreadCount}</span>` : totalComments > 0 ? `<span class="comment-badge read" title="${totalComments} 条评论（已读）">💬</span>` : ''}
+        ${unreadCount > 0 ? `<span class="comment-badge unread" title="任务有新动态">●</span>` : ''}
         <span class="status-pill ${sc.class}" data-task-id="${task.id}">
           <span class="status-dot"></span>${sc.label}
         </span>
@@ -1280,12 +1328,32 @@ function toggleTaskComplete(taskId) {
     task.completedDate = new Date().toISOString().split('T')[0];
     addHistory(task, '标记任务为已完成');
     showToast('任务已标记为已完成', 'success');
-    task.assignees.forEach(uid => {
-      if (uid !== data.currentUserId) {
-        addNotification(uid, 'status', task.id,
-          `${getCurrentUser().name} 将任务「${task.title}」标记为已完成`);
-      }
-    });
+    // 记录活动（触发其他人红点）
+    recordTaskActivity(task, data.currentUserId);
+    if (isAdmin()) {
+      // 管理员完成任务 → 通知所有责任人
+      task.assignees.forEach(uid => {
+        if (uid !== data.currentUserId) {
+          addNotification(uid, 'status', task.id,
+            `${getCurrentUser().name} 将任务「${task.title}」标记为已完成`);
+        }
+      });
+    } else {
+      // 组员完成任务 → 通知所有管理员
+      data.members.forEach(function(m) {
+        if (m.role === '管理员' && m.id !== data.currentUserId) {
+          addNotification(m.id, 'status', task.id,
+            `${getCurrentUser().name} 将任务「${task.title}」标记为已完成`);
+        }
+      });
+      // 同时通知其他责任人
+      task.assignees.forEach(uid => {
+        if (uid !== data.currentUserId) {
+          addNotification(uid, 'status', task.id,
+            `${getCurrentUser().name} 将任务「${task.title}」标记为已完成`);
+        }
+      });
+    }
   }
   saveData();
   renderAll();
@@ -1345,6 +1413,12 @@ function deleteTaskDirectly(taskId) {
     return;
   }
   if (!confirm(`确定要删除任务「${task.title}」吗？`)) return;
+  // 通知所有责任人
+  task.assignees.forEach(uid => {
+    if (uid !== data.currentUserId) {
+      addNotification(uid, 'task', task.id, `${getCurrentUser().name} 删除了任务「${task.title}」`);
+    }
+  });
   // 记录删除的任务ID，防止saveDataInternal合并时从服务器恢复
   deletedTaskIds.add(taskId);
   data.tasks = data.tasks.filter(t => t.id !== taskId);
@@ -1403,6 +1477,17 @@ function batchDeleteTasks() {
   }
   const count = selectedTaskIds.size;
   if (!confirm(`确定要删除选中的 ${count} 个任务吗？此操作不可恢复。`)) return;
+  // 通知所有被删除任务的责任人
+  selectedTaskIds.forEach(id => {
+    const task = data.tasks.find(t => t.id === id);
+    if (task) {
+      task.assignees.forEach(uid => {
+        if (uid !== data.currentUserId) {
+          addNotification(uid, 'task', task.id, `${getCurrentUser().name} 删除了任务「${task.title}」`);
+        }
+      });
+    }
+  });
   selectedTaskIds.forEach(id => deletedTaskIds.add(id));
   data.tasks = data.tasks.filter(t => !selectedTaskIds.has(t.id));
   selectedTaskIds.clear();
@@ -1569,11 +1654,22 @@ function saveTask() {
       task.completedDate = completedDate;
       task.clientId = clientId;
       task.assignees = [...selectedAssignees];
+      // 通知新增的责任人
       selectedAssignees.forEach(uid => {
         if (!oldAssignees.includes(uid) && uid !== data.currentUserId) {
           addNotification(uid, 'task', task.id, `${getCurrentUser().name} 将任务「${task.title}」指派给你`);
         }
       });
+      // 通知被移除的责任人
+      oldAssignees.forEach(uid => {
+        if (!selectedAssignees.includes(uid) && uid !== data.currentUserId) {
+          addNotification(uid, 'task', task.id, `${getCurrentUser().name} 已将你从任务「${task.title}」中移除`);
+        }
+      });
+      // 进展有变化时，记录活动（触发其他人红点）
+      if (task.progress !== progress) {
+        recordTaskActivity(task, data.currentUserId);
+      }
       if (changes.length > 0) {
         addHistory(task, changes.length === 1 ? changes[0] : `更新了 ${changes.length} 项内容：\n${changes.join('；')}`);
       }
@@ -1589,6 +1685,9 @@ function saveTask() {
       comments: [],
       commentReadBy: {},
       history: [],
+      lastActivityAt: null,
+      lastActivityBy: null,
+      lastReadAt: {},
     };
     const assigneeNames = selectedAssignees.map(a => { const m = getMember(a); return m ? m.name : ''; }).filter(Boolean).join('、');
     addHistory(newTask, `创建任务，指派给 ${assigneeNames || '未指派'}，计划日期 ${dueDate}`);
@@ -1639,9 +1738,9 @@ function openDetail(taskId) {
     }
   }
 
-  // 标记当前用户已查看此任务的所有评论（清除未读红点）
-  if (getUnreadCommentCount(task, data.currentUserId) > 0) {
-    markCommentsRead(task, data.currentUserId);
+  // 标记当前用户已查看此任务的所有活动（清除红点）
+  if (getUnreadActivityCount(task, data.currentUserId) > 0) {
+    markActivityRead(task, data.currentUserId);
     needsSave = true;
   }
   if (needsSave) {
@@ -1813,8 +1912,10 @@ function addComment() {
   });
   const commentPreview = text.length > 30 ? text.substring(0, 30) + '...' : text;
   addHistory(task, `发表评论：${commentPreview}`);
-  // 评论者自己已读所有评论
-  markCommentsRead(task, data.currentUserId);
+  // 评论者自己已读
+  markActivityRead(task, data.currentUserId);
+  // 记录活动（触发其他人红点）
+  recordTaskActivity(task, data.currentUserId);
   saveData();
   renderComments(task);
   input.value = '';

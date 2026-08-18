@@ -800,33 +800,21 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    border-radius: 10px;
-    font-size: 10px;
-    font-weight: 700;
-    line-height: 1;
     flex-shrink: 0;
-    min-width: 18px;
-    height: 18px;
-    padding: 0 5px;
   }
   .comment-badge.unread {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
     background: #ff3b30;
-    color: #fff;
-    box-shadow: 0 0 0 2px rgba(255, 59, 48, 0.2);
+    color: transparent;
+    font-size: 0;
+    box-shadow: 0 0 0 3px rgba(255, 59, 48, 0.25);
     animation: badge-pulse 2s ease-in-out infinite;
   }
-  .comment-badge.read {
-    background: transparent;
-    color: var(--muted2);
-    font-size: 12px;
-    opacity: 0.5;
-    min-width: auto;
-    height: auto;
-    padding: 0;
-  }
   @keyframes badge-pulse {
-    0%, 100% { box-shadow: 0 0 0 2px rgba(255, 59, 48, 0.2); }
-    50% { box-shadow: 0 0 0 5px rgba(255, 59, 48, 0.05); }
+    0%, 100% { box-shadow: 0 0 0 3px rgba(255, 59, 48, 0.25); }
+    50% { box-shadow: 0 0 0 6px rgba(255, 59, 48, 0.06); }
   }
 
   .task-row-more {
@@ -5020,7 +5008,7 @@ body { padding-bottom: 0 !important; }
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2/dist/jspdf.plugin.autotable.min.js"></script>
-<script src="assets/app.js?v=31"></script>
+<script src="assets/app.js?v=32"></script>
 
 <!-- 批量操作栏 -->
 <div class="batch-action-bar" id="batchActionBar">
