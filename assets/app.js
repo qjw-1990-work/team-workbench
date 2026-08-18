@@ -1647,6 +1647,7 @@ function saveTask() {
       const newNames = selectedAssignees.map(a => { const m = getMember(a); return m ? m.name : a; }).join('、');
       if (oldAssignees.join(',') !== selectedAssignees.join(',')) changes.push(`负责人: ${oldNames || '无'} → ${newNames || '无'}`);
 
+      const oldProgress = task.progress;
       task.title = title;
       task.segment = segment;
       task.progress = progress;
@@ -1667,7 +1668,7 @@ function saveTask() {
         }
       });
       // 进展有变化时，记录活动（触发其他人红点）
-      if (task.progress !== progress) {
+      if (oldProgress !== progress) {
         recordTaskActivity(task, data.currentUserId);
       }
       if (changes.length > 0) {
