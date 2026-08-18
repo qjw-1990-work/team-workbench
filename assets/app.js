@@ -313,20 +313,68 @@ async function saveDataInternal() {
             }
           });
 
-          // 2. 合并云端任务的内容变更（其他设备编辑的）
-          // 如果云端某任务内容与本地不同，说明被其他设备修改过，使用云端版本
+          // 2. 智能合并：对于两边都有的任务，保留本地修改的字段，同时合并云端新增的内容
           syncData.tasks.forEach(function(lt, idx) {
             var ct = cloudTaskMap[lt.id];
-            if (ct && JSON.stringify(ct) !== JSON.stringify(lt)) {
-              syncData.tasks[idx] = ct;
-              merged = true;
+            if (!ct) return;
+            // 比较云端版本，合并云端独有的增量数据
+            var taskChanged = false;
+
+            // 2a. 合并 firstViewedBy：保留所有已查看记录（取并集）
+            if (ct.firstViewedBy) {
+              if (!lt.firstViewedBy) lt.firstViewedBy = {};
+              Object.keys(ct.firstViewedBy).forEach(function(k) {
+                if (!lt.firstViewedBy[k]) {
+                  lt.firstViewedBy[k] = ct.firstViewedBy[k];
+                  taskChanged = true;
+                }
+              });
             }
+
+            // 2b. 合并 comments：保留所有评论（按 id 去重）
+            if (ct.comments && ct.comments.length > 0) {
+              if (!lt.comments) lt.comments = [];
+              var localCommentIds = {};
+              lt.comments.forEach(function(c) { localCommentIds[c.id] = true; });
+              ct.comments.forEach(function(cc) {
+                if (!localCommentIds[cc.id]) {
+                  lt.comments.push(cc);
+                  taskChanged = true;
+                }
+              });
+            }
+
+            // 2c. 合并 commentReadBy：保留所有已读记录（取并集）
+            if (ct.commentReadBy) {
+              if (!lt.commentReadBy) lt.commentReadBy = {};
+              Object.keys(ct.commentReadBy).forEach(function(k) {
+                if (!lt.commentReadBy[k]) {
+                  lt.commentReadBy[k] = ct.commentReadBy[k];
+                  taskChanged = true;
+                }
+              });
+            }
+
+            // 2d. 合并 history：保留所有历史记录（按 id 去重，取并集）
+            if (ct.history && ct.history.length > 0) {
+              if (!lt.history) lt.history = [];
+              var localHistoryIds = {};
+              lt.history.forEach(function(h) { localHistoryIds[h.id] = true; });
+              ct.history.forEach(function(ch) {
+                if (!localHistoryIds[ch.id]) {
+                  lt.history.push(ch);
+                  taskChanged = true;
+                }
+              });
+            }
+
+            if (taskChanged) merged = true;
           });
 
           if (merged) {
             data.tasks = syncData.tasks.slice();
             saveLocalDataCache(data);
-            console.log('保存前合并云端数据变更');
+            console.log('保存前智能合并云端增量数据');
           }
         }
       }
