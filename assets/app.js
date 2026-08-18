@@ -983,9 +983,8 @@ function getTaskStatus(task) {
   const currentUserId = data ? data.currentUserId : getCurrentUserId();
 
   // 待办：当责任人尚未点击过此任务时，所有人都看到"待办"
-  // 例外：如果当前用户是任务创建者，跳过待办，直接按时间逻辑显示
-  // 不管是管理员还是组员，只要对应的责任人没点过，就显示待办
-  if (task.createdBy && task.createdBy !== currentUserId && task.assignees && task.assignees.length > 0) {
+  // 不管是管理员（创建者）还是组员，只要对应的责任人没点过，就显示待办
+  if (task.createdBy && task.assignees && task.assignees.length > 0) {
     const viewedBy = task.firstViewedBy || {};
 
     if (task.assignees.includes(currentUserId)) {
