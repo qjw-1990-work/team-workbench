@@ -91,14 +91,6 @@ function normalizeData(d) {
     delete t.desc; delete t.priority;
   });
   if (!d.clients) d.clients = [];
-  // 迁移：旧 Merit 名称 -> 长春Merit
-  d.clients.forEach(function(c) {
-    if (c.name === 'Merit') c.name = '长春Merit';
-  });
-  // 确保墨西哥Merit存在
-  if (!d.clients.some(function(c) { return c.id === 'c14'; })) {
-    d.clients.push({ id: 'c14', name: '墨西哥Merit', color: '#ff9500' });
-  }
   if (!d.members) d.members = [];
   if (!d.notifications) d.notifications = [];
   if (!d.permissions) d.permissions = JSON.parse(JSON.stringify(defaultPermissions));
