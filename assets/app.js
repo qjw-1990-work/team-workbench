@@ -62,6 +62,7 @@ let isSaving = false;
 let serverDataLoaded = false; // 标记是否已成功从服务器加载过数据
 let saveTimer = null; // 保存防抖计时器
 let deletedTaskIds = new Set(); // 跟踪本地删除的任务ID，防止合并时从服务器恢复
+let selectedTaskIds = new Set(); // 批量选择的任务ID
 
 // 统一数据迁移函数
 function normalizeData(d) {
@@ -400,13 +401,13 @@ async function pollSync() {
     const snapshot = makeSnapshot(parsed);
     if (snapshot === lastDataSnapshot) return; // 数据无变化，跳过
 
-    // 保存保护：如果本地最近刚保存过，且云端任务数少于本地，说明云端数据可能尚未同步完成
-    // 此时拒绝用云端数据覆盖本地，防止任务消失
+    // 保存保护：如果本地最近刚保存过，且云端任务数与本地不一致，说明云端数据可能尚未同步完成
+    // 此时拒绝用云端数据覆盖本地，防止任务消失或恢复
     const now = Date.now();
     const localTaskCount = (data && data.tasks) ? data.tasks.length : 0;
     const cloudTaskCount = parsed.tasks.length;
-    if (now - lastLocalSaveTime < SAVE_GUARD_WINDOW && cloudTaskCount < localTaskCount) {
-      console.warn(`pollSync: 保存保护窗口内，云端任务(${cloudTaskCount})少于本地(${localTaskCount})，跳过同步`);
+    if (now - lastLocalSaveTime < SAVE_GUARD_WINDOW && cloudTaskCount !== localTaskCount) {
+      console.warn(`pollSync: 保存保护窗口内，云端任务(${cloudTaskCount})与本地(${localTaskCount})不一致，跳过同步`);
       return;
     }
 
@@ -1099,6 +1100,9 @@ function renderKanban() {
       <div class="client-body">
         <div class="task-list">
           <div class="task-list-header">
+            <div style="width:32px;display:flex;align-items:center;justify-content:center">
+              <input type="checkbox" class="select-all-checkbox" onclick="toggleSelectAll('${client.id}', this.checked)" title="全选/取消全选" style="width:15px;height:15px;cursor:pointer">
+            </div>
             <div>客户细分</div>
             <div>任务内容</div>
             <div>创建人</div>
@@ -1145,6 +1149,9 @@ function renderTaskRow(task) {
 
   return `
     <div class="task-row" data-task-id="${task.id}">
+      <div class="task-row-cell" style="display:flex;align-items:center;justify-content:center" onclick="event.stopPropagation()">
+        <input type="checkbox" class="task-checkbox" data-task-id="${task.id}" onclick="toggleSelectTask('${task.id}', this.checked)" style="width:15px;height:15px;cursor:pointer">
+      </div>
       <div class="task-row-cell">
         ${task.segment ? `<span class="task-row-segment">${escapeHtml(task.segment)}</span>` : '<span style="color:var(--muted)">-</span>'}
       </div>
@@ -1262,9 +1269,74 @@ function deleteTaskDirectly(taskId) {
   // 记录删除的任务ID，防止saveDataInternal合并时从服务器恢复
   deletedTaskIds.add(taskId);
   data.tasks = data.tasks.filter(t => t.id !== taskId);
+  selectedTaskIds.delete(taskId);
   saveData();
   renderAll();
   showToast('任务已删除', 'warning');
+}
+
+// 批量选择
+function toggleSelectTask(taskId, checked) {
+  if (checked) {
+    selectedTaskIds.add(taskId);
+  } else {
+    selectedTaskIds.delete(taskId);
+  }
+  updateBatchBar();
+}
+
+function toggleSelectAll(clientId, checked) {
+  const tasks = data.tasks.filter(t => t.clientId === clientId);
+  if (currentStatusFilter !== 'all') {
+    tasks = tasks.filter(t => getTaskStatus(t) === currentStatusFilter);
+  }
+  tasks.forEach(t => {
+    if (checked) {
+      selectedTaskIds.add(t.id);
+    } else {
+      selectedTaskIds.delete(t.id);
+    }
+  });
+  // 更新当前客户下的所有复选框
+  document.querySelectorAll(`[data-client-id="${clientId}"] .task-checkbox`).forEach(cb => {
+    cb.checked = checked;
+  });
+  updateBatchBar();
+}
+
+function updateBatchBar() {
+  const bar = document.getElementById('batchActionBar');
+  const count = document.getElementById('batchCount');
+  if (!bar) return;
+  if (selectedTaskIds.size > 0) {
+    bar.style.display = 'flex';
+    count.textContent = selectedTaskIds.size;
+  } else {
+    bar.style.display = 'none';
+  }
+}
+
+function batchDeleteTasks() {
+  if (selectedTaskIds.size === 0) return;
+  if (!hasPermission('memberCanDeleteTask')) {
+    showToast('你没有删除任务的权限', 'error');
+    return;
+  }
+  const count = selectedTaskIds.size;
+  if (!confirm(`确定要删除选中的 ${count} 个任务吗？此操作不可恢复。`)) return;
+  selectedTaskIds.forEach(id => deletedTaskIds.add(id));
+  data.tasks = data.tasks.filter(t => !selectedTaskIds.has(t.id));
+  selectedTaskIds.clear();
+  saveData();
+  renderAll();
+  showToast(`已删除 ${count} 个任务`, 'warning');
+}
+
+function clearSelection() {
+  selectedTaskIds.clear();
+  document.querySelectorAll('.task-checkbox').forEach(cb => { cb.checked = false; });
+  document.querySelectorAll('.select-all-checkbox').forEach(cb => { cb.checked = false; });
+  updateBatchBar();
 }
 
 // 状态筛选
@@ -2379,6 +2451,11 @@ function renderAll() {
   syncTaskStatuses();
   updatePermissionUI();
   renderKanban();
+  // 恢复选中状态
+  document.querySelectorAll('.task-checkbox').forEach(cb => {
+    cb.checked = selectedTaskIds.has(cb.dataset.taskId);
+  });
+  updateBatchBar();
   renderTeam();
   renderNotifications();
   updateNotifBadge();

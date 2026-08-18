@@ -632,7 +632,7 @@
 
   .task-list-header {
     display: grid;
-    grid-template-columns: 100px minmax(200px, 2fr) 80px 100px 100px 120px 100px 90px 100px 50px;
+    grid-template-columns: 32px 100px minmax(200px, 2fr) 80px 100px 100px 120px 100px 90px 100px 50px;
     gap: 8px;
     padding: 8px 16px;
     font-size: 11px;
@@ -645,7 +645,7 @@
 
   .task-row {
     display: grid;
-    grid-template-columns: 100px minmax(200px, 2fr) 80px 100px 100px 120px 100px 90px 100px 50px;
+    grid-template-columns: 32px 100px minmax(200px, 2fr) 80px 100px 100px 120px 100px 90px 100px 50px;
     gap: 8px;
     padding: 10px 16px;
     align-items: center;
@@ -835,6 +835,49 @@
   }
 
   .task-row:hover .task-row-more { opacity: 0.8; }
+
+  /* 批量操作栏 */
+  .batch-action-bar {
+    display: none;
+    position: fixed;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-card);
+    padding: 10px 20px;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+    z-index: 1000;
+    align-items: center;
+    gap: 16px;
+    font-size: 13px;
+    font-weight: 500;
+  }
+  .batch-action-bar .batch-count {
+    color: var(--brand);
+    font-weight: 700;
+  }
+  .batch-action-bar button {
+    padding: 6px 14px;
+    border-radius: var(--radius);
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text);
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 500;
+    transition: all 0.15s;
+  }
+  .batch-action-bar button:hover { opacity: 0.8; }
+  .batch-action-bar .batch-delete-btn {
+    background: var(--danger);
+    color: #fff;
+    border-color: var(--danger);
+  }
+  .batch-action-bar .batch-cancel-btn {
+    color: var(--text-muted);
+  }
 
   .client-empty {
     padding: 24px;
@@ -1572,12 +1615,12 @@
 
   @media (max-width: 1100px) {
     .task-list-header {
-      grid-template-columns: 90px minmax(180px, 1.5fr) 70px 80px 80px 100px 80px 80px 90px 40px;
+      grid-template-columns: 32px 90px minmax(180px, 1.5fr) 70px 80px 80px 100px 80px 80px 90px 40px;
       font-size: 10px;
       padding: 8px 12px;
     }
     .task-row {
-      grid-template-columns: 90px minmax(180px, 1.5fr) 70px 80px 80px 100px 80px 80px 90px 40px;
+      grid-template-columns: 32px 90px minmax(180px, 1.5fr) 70px 80px 80px 100px 80px 80px 90px 40px;
       padding: 10px 12px;
       gap: 6px;
     }
@@ -1587,13 +1630,13 @@
     .client-stats { display: none; }
     .task-list { overflow-x: auto; }
     .task-list-header {
-      grid-template-columns: 80px minmax(200px, 2fr) 80px 90px 100px 70px;
+      grid-template-columns: 32px 80px minmax(200px, 2fr) 80px 90px 100px 70px;
     }
-    .task-list-header > div:nth-child(n+7):nth-child(-n+9) { display: none; }
+    .task-list-header > div:nth-child(n+8):nth-child(-n+10) { display: none; }
     .task-row {
-      grid-template-columns: 80px minmax(200px, 2fr) 80px 90px 100px 70px;
+      grid-template-columns: 32px 80px minmax(200px, 2fr) 80px 90px 100px 70px;
     }
-    .task-row > div:nth-child(n+7):nth-child(-n+9) { display: none; }
+    .task-row > div:nth-child(n+8):nth-child(-n+10) { display: none; }
   }
 
   @media (max-width: 768px) {
@@ -4947,7 +4990,13 @@ body { padding-bottom: 0 !important; }
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2/dist/jspdf.plugin.autotable.min.js"></script>
-<script src="assets/app.js?v=23"></script>
+<script src="assets/app.js?v=24"></script>
 
+<!-- 批量操作栏 -->
+<div class="batch-action-bar" id="batchActionBar">
+  <span>已选择 <span class="batch-count" id="batchCount">0</span> 个任务</span>
+  <button class="batch-delete-btn" onclick="batchDeleteTasks()">🗑️ 批量删除</button>
+  <button class="batch-cancel-btn" onclick="clearSelection()">取消选择</button>
+</div>
 
 </body></html>
