@@ -1598,6 +1598,14 @@ function saveTask() {
         addNotification(uid, 'task', newTask.id, `${getCurrentUser().name} 指派了新任务「${newTask.title}」给你`);
       }
     });
+    // 非管理员创建任务时，通知所有管理员
+    if (!isAdmin()) {
+      data.members.forEach(function(m) {
+        if (m.role === '管理员' && m.id !== data.currentUserId) {
+          addNotification(m.id, 'task', newTask.id, `${getCurrentUser().name} 创建了新任务「${newTask.title}」`);
+        }
+      });
+    }
     showToast('任务已创建', 'success');
   }
 
@@ -1636,7 +1644,11 @@ function openDetail(taskId) {
     markCommentsRead(task, data.currentUserId);
     needsSave = true;
   }
-  if (needsSave) saveData();
+  if (needsSave) {
+    // 立即保存到本地缓存，确保红点即时消失
+    saveLocalDataCache(data);
+    saveData();
+  }
 
   const status = getTaskStatus(task);
   const sc = statusConfig[status];
