@@ -632,7 +632,7 @@
 
   .task-list-header {
     display: grid;
-    grid-template-columns: 32px 100px minmax(200px, 2fr) 80px 100px 100px 120px 100px 90px 100px 50px;
+    grid-template-columns: 32px 100px 240px 80px 100px 100px 120px 100px 90px 100px 50px;
     gap: 8px;
     padding: 8px 16px;
     font-size: 11px;
@@ -643,9 +643,25 @@
     white-space: nowrap;
   }
 
+  /* 列宽拖拽手柄（Excel风格） */
+  .col-resize-handle {
+    position: absolute;
+    right: -4px;
+    top: 0;
+    bottom: 0;
+    width: 8px;
+    cursor: col-resize;
+    z-index: 10;
+    background: transparent;
+    transition: background 0.15s;
+  }
+  .col-resize-handle:hover {
+    background: rgba(91, 95, 199, 0.2);
+  }
+
   .task-row {
     display: grid;
-    grid-template-columns: 32px 100px minmax(200px, 2fr) 80px 100px 100px 120px 100px 90px 100px 50px;
+    grid-template-columns: 32px 100px 240px 80px 100px 100px 120px 100px 90px 100px 50px;
     gap: 8px;
     padding: 10px 16px;
     align-items: center;
@@ -1615,12 +1631,12 @@
 
   @media (max-width: 1100px) {
     .task-list-header {
-      grid-template-columns: 32px 90px minmax(180px, 1.5fr) 70px 80px 80px 100px 80px 80px 90px 40px;
+      grid-template-columns: 32px 90px 200px 70px 80px 80px 100px 80px 80px 90px 40px;
       font-size: 10px;
       padding: 8px 12px;
     }
     .task-row {
-      grid-template-columns: 32px 90px minmax(180px, 1.5fr) 70px 80px 80px 100px 80px 80px 90px 40px;
+      grid-template-columns: 32px 90px 200px 70px 80px 80px 100px 80px 80px 90px 40px;
       padding: 10px 12px;
       gap: 6px;
     }
@@ -1630,11 +1646,11 @@
     .client-stats { display: none; }
     .task-list { overflow-x: auto; }
     .task-list-header {
-      grid-template-columns: 32px 80px minmax(200px, 2fr) 80px 90px 100px 70px;
+      grid-template-columns: 32px 80px 180px 80px 90px 100px 70px;
     }
     .task-list-header > div:nth-child(n+8):nth-child(-n+10) { display: none; }
     .task-row {
-      grid-template-columns: 32px 80px minmax(200px, 2fr) 80px 90px 100px 70px;
+      grid-template-columns: 32px 80px 180px 80px 90px 100px 70px;
     }
     .task-row > div:nth-child(n+8):nth-child(-n+10) { display: none; }
   }
@@ -3502,9 +3518,9 @@
         <div class="nav-icon">🔐</div>
         <span>权限设置</span>
       </div>
-      <div class="nav-item" data-view="columnWidths" id="navColumnWidths" style="display:none">
-        <div class="nav-icon">📏</div>
-        <span>列宽设置</span>
+      <div class="nav-item" data-view="clientSegments" id="navClientSegments" style="display:none">
+        <div class="nav-icon">🏷️</div>
+        <span>客户细分</span>
       </div>
     </nav>
     <div class="sidebar-footer">
@@ -4516,22 +4532,14 @@
         <div id="permissionsContainer"></div>
       </div>
 
-      <div class="view" id="view-columnWidths">
+      <div class="view" id="view-clientSegments">
         <div class="team-header">
           <div>
-            <h2 style="font-size:18px;font-weight:600;margin-bottom:4px">列宽设置</h2>
-            <p style="color:var(--muted);font-size:13px">调整任务看板中各列的宽度，设置后所有成员同步</p>
-          </div>
-          <div style="display:flex;gap:8px">
-            <button class="btn btn-secondary" onclick="resetColumnWidths()">
-              <span>↺</span> 恢复默认
-            </button>
-            <button class="btn btn-primary" onclick="saveColumnWidths()">
-              <span>✓</span> 保存设置
-            </button>
+            <h2 style="font-size:18px;font-weight:600;margin-bottom:4px">客户细分管理</h2>
+            <p style="color:var(--muted);font-size:13px">管理各客户在创建任务时的"客户细分"下拉选项，设置后所有成员同步</p>
           </div>
         </div>
-        <div id="columnWidthsContainer" style="max-width:600px"></div>
+        <div id="clientSegmentsContainer" style="max-width:700px"></div>
       </div>
     </div>
   </main>
@@ -5012,7 +5020,7 @@ body { padding-bottom: 0 !important; }
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2/dist/jspdf.plugin.autotable.min.js"></script>
-<script src="assets/app.js?v=28"></script>
+<script src="assets/app.js?v=29"></script>
 
 <!-- 批量操作栏 -->
 <div class="batch-action-bar" id="batchActionBar">
