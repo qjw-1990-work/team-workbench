@@ -3502,6 +3502,10 @@
         <div class="nav-icon">🔐</div>
         <span>权限设置</span>
       </div>
+      <div class="nav-item" data-view="columnWidths" id="navColumnWidths" style="display:none">
+        <div class="nav-icon">📏</div>
+        <span>列宽设置</span>
+      </div>
     </nav>
     <div class="sidebar-footer">
       <div class="current-user" id="userMenuTrigger" onclick="toggleUserMenu(event)">
@@ -4511,6 +4515,24 @@
         </div>
         <div id="permissionsContainer"></div>
       </div>
+
+      <div class="view" id="view-columnWidths">
+        <div class="team-header">
+          <div>
+            <h2 style="font-size:18px;font-weight:600;margin-bottom:4px">列宽设置</h2>
+            <p style="color:var(--muted);font-size:13px">调整任务看板中各列的宽度，设置后所有成员同步</p>
+          </div>
+          <div style="display:flex;gap:8px">
+            <button class="btn btn-secondary" onclick="resetColumnWidths()">
+              <span>↺</span> 恢复默认
+            </button>
+            <button class="btn btn-primary" onclick="saveColumnWidths()">
+              <span>✓</span> 保存设置
+            </button>
+          </div>
+        </div>
+        <div id="columnWidthsContainer" style="max-width:600px"></div>
+      </div>
     </div>
   </main>
 </div>
@@ -4990,7 +5012,7 @@ body { padding-bottom: 0 !important; }
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2/dist/jspdf.plugin.autotable.min.js"></script>
-<script src="assets/app.js?v=25"></script>
+<script src="assets/app.js?v=26"></script>
 
 <!-- 批量操作栏 -->
 <div class="batch-action-bar" id="batchActionBar">
