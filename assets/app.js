@@ -105,101 +105,64 @@ function makeSnapshot(d) {
   });
 }
 
-// 加载数据：localStorage 优先，但会对比云端确保数据最新
+// 加载数据：云端优先，localStorage 仅做兜底
 async function loadData() {
-  // 1. 优先从 localStorage 加载（最快，包含用户最近修改）
+  // 1. 先尝试从云端加载（云端是唯一真实数据源）
+  var cloudLoaded = false;
+  try {
+    var cloudRes = await apiFetch(CLOUD_DATA_PATH);
+    if (cloudRes.ok) {
+      var cloudData = await cloudRes.json();
+      if (cloudData && (cloudData.tasks || cloudData.members || cloudData.clients)) {
+        cloudLoaded = true;
+        var parsed = {
+          tasks: cloudData.tasks || [],
+          members: cloudData.members || defaultData.members,
+          clients: cloudData.clients || defaultData.clients,
+          permissions: cloudData.permissions || JSON.parse(JSON.stringify(defaultPermissions)),
+          notifications: cloudData.notifications || [],
+        };
+        normalizeData(parsed);
+        parsed.currentUserId = getCurrentUserId();
+        // 从 localStorage 恢复 collapsedClients（纯 UI 状态，不存在云端）
+        var localData = loadLocalData();
+        parsed.collapsedClients = (localData && localData.collapsedClients) ? localData.collapsedClients : [];
+        lastSyncTime = Date.now();
+        lastDataSnapshot = makeSnapshot(parsed);
+        serverDataLoaded = true;
+        saveLocalDataCache(parsed);
+        console.log(`从云端加载: ${parsed.tasks.length} 条任务`);
+        return parsed;
+      }
+    }
+  } catch (e) {
+    console.warn('云端加载失败，尝试本地缓存:', e.message);
+  }
+
+  // 2. 云端不可用时，从 localStorage 兜底
   var localData = loadLocalData();
   if (localData && localData.tasks && localData.tasks.length > 0) {
-    // 后台检查云端是否有更新的数据（防止 stale localStorage 覆盖）
-    var cloudHasNewer = false;
-    try {
-      var cloudCheck = await apiFetch(CLOUD_DATA_PATH);
-      if (cloudCheck.ok) {
-        var cloudData = await cloudCheck.json();
-        if (cloudData && cloudData.tasks && cloudData.tasks.length > localData.tasks.length) {
-          // 云端任务更多，说明本地数据已过期，使用云端数据
-          cloudHasNewer = true;
-          console.log(`云端有更新数据 (${cloudData.tasks.length} vs ${localData.tasks.length} 条)，使用云端数据`);
-          var parsed = {
-            tasks: cloudData.tasks || [],
-            members: cloudData.members || defaultData.members,
-            clients: cloudData.clients || defaultData.clients,
-            permissions: cloudData.permissions || JSON.parse(JSON.stringify(defaultPermissions)),
-            notifications: cloudData.notifications || [],
-          };
-          normalizeData(parsed);
-          parsed.currentUserId = getCurrentUserId();
-          parsed.collapsedClients = localData.collapsedClients || [];
-          lastSyncTime = Date.now();
-          lastDataSnapshot = makeSnapshot(parsed);
-          serverDataLoaded = true;
-          saveLocalDataCache(parsed);
-          return parsed;
-        }
-      }
-    } catch (e) {
-      console.warn('云端对比检查失败，使用本地数据:', e.message);
-    }
-
-    if (!cloudHasNewer) {
-      var parsed = {
-        tasks: localData.tasks || [],
-        members: localData.members || defaultData.members,
-        clients: localData.clients || defaultData.clients,
-        permissions: localData.permissions || JSON.parse(JSON.stringify(defaultPermissions)),
-        notifications: localData.notifications || [],
-      };
-      normalizeData(parsed);
-      parsed.currentUserId = getCurrentUserId();
-      if (!parsed.collapsedClients) parsed.collapsedClients = localData.collapsedClients || [];
-      lastSyncTime = Date.now();
-      lastDataSnapshot = makeSnapshot(parsed);
-      serverDataLoaded = true;
-      console.log(`从本地缓存加载: ${parsed.tasks.length} 条任务`);
-      // 立即同步到云端（不等后台定时器），防止 pollSync 用旧数据覆盖本地
-      // 同时记录保存时间，触发 pollSync 保护窗口
-      lastLocalSaveTime = Date.now();
-      saveToCloudImmediate(parsed);
-      return parsed;
-    }
+    var parsed = {
+      tasks: localData.tasks || [],
+      members: localData.members || defaultData.members,
+      clients: localData.clients || defaultData.clients,
+      permissions: localData.permissions || JSON.parse(JSON.stringify(defaultPermissions)),
+      notifications: localData.notifications || [],
+    };
+    normalizeData(parsed);
+    parsed.currentUserId = getCurrentUserId();
+    if (!parsed.collapsedClients) parsed.collapsedClients = localData.collapsedClients || [];
+    lastSyncTime = Date.now();
+    lastDataSnapshot = makeSnapshot(parsed);
+    serverDataLoaded = true;
+    console.log(`从本地缓存加载（云端不可用）: ${parsed.tasks.length} 条任务`);
+    // 云端不可用时，不主动上传本地数据（防止覆盖云端）
+    return parsed;
   }
 
-  // 2. 从 MantleDB 云端加载
-  const MAX_RETRIES = 2;
-  const RETRY_DELAY = 1500;
-  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-    try {
-      const res = await apiFetch(CLOUD_DATA_PATH);
-      if (!res.ok) throw new Error(`云端不可用: ${res.status}`);
-      const serverData = await res.json();
-      if (!serverData.members && !serverData.clients && !serverData.tasks) {
-        throw new Error('云端数据为空');
-      }
-      const parsed = {
-        tasks: serverData.tasks || [],
-        members: serverData.members || [],
-        clients: serverData.clients || [],
-        permissions: serverData.permissions || JSON.parse(JSON.stringify(defaultPermissions)),
-        notifications: serverData.notifications || [],
-      };
-      normalizeData(parsed);
-      parsed.currentUserId = getCurrentUserId();
-      if (!parsed.collapsedClients) parsed.collapsedClients = [];
-      lastSyncTime = Date.now();
-      lastDataSnapshot = makeSnapshot(parsed);
-      serverDataLoaded = true;
-      saveLocalDataCache(parsed);
-      console.log(`从云端加载: ${parsed.tasks.length} 条任务`);
-      return parsed;
-    } catch (e) {
-      console.warn(`云端加载失败 (${attempt}/${MAX_RETRIES}):`, e.message);
-      if (attempt < MAX_RETRIES) await new Promise(r => setTimeout(r, RETRY_DELAY));
-    }
-  }
-
-  // 3. 兜底：使用默认数据（无任务）
+  // 3. 最终兜底：使用默认数据
   console.warn('所有加载尝试均失败，使用默认数据');
-  const fallback = {
+  var fallback = {
     tasks: [],
     members: defaultData.members,
     clients: defaultData.clients,
