@@ -774,6 +774,8 @@ function isAdmin() {
 function hasPermission(key) {
   if (isAdmin()) return true;
   if (!data.permissions) return true; // 兼容旧数据
+  // 如果权限对象中没有这个 key，使用默认值
+  if (!(key in data.permissions)) return !!defaultPermissions[key];
   return !!data.permissions[key];
 }
 
