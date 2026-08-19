@@ -275,17 +275,37 @@ async function syncToCloudIfNeeded(d) {
   cloudSyncInProgress = false;
 }
 
-// 保存数据到服务器 + 本地缓存
+// 保存数据到服务器 + 本地缓存（带防抖，200ms）
 function saveData() {
   if (!serverDataLoaded) {
-    console.warn('数据未加载完成，跳过保存');
+    console.warn('数据未加载完成，先保存到本地缓存');
+    // 数据未加载完成时，至少保存到本地缓存
+    if (data) saveLocalDataCache(data);
+    // 延迟重试
+    if (saveTimer) clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => {
+      saveTimer = null;
+      if (serverDataLoaded) saveDataInternal();
+      else { console.warn('数据仍未加载，跳过云端保存'); }
+    }, 1000);
     return;
   }
   if (saveTimer) clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
     saveTimer = null;
     saveDataInternal();
-  }, 500);
+  }, 200);
+}
+
+// 立即保存（绕过防抖，用于关键操作如创建任务、添加评论）
+function saveDataImmediate() {
+  if (!serverDataLoaded) {
+    if (data) saveLocalDataCache(data);
+    return;
+  }
+  // 清除防抖计时器，直接保存
+  if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+  saveDataInternal();
 }
 
 // 智能合并云端增量数据到 syncData（提取为独立函数，方便重试）
@@ -524,24 +544,84 @@ async function saveDataInternal() {
       });
 
       if (saveRes.ok) {
-        lastSyncTime = Date.now();
-        lastLocalSaveTime = Date.now();
-        lastDataSnapshot = makeSnapshot(syncData);
-        deletedTaskIds.clear();
-        saveSuccess = true;
-        console.log('保存完成: ' + syncData.tasks.length + ' 条任务');
+        // 6. 保存后验证：读取云端数据确认写入成功（防止 MantleDB 最终一致性问题）
+        var verifyOk = false;
+        try {
+          var verifyRes = await apiFetch(CLOUD_DATA_PATH);
+          if (verifyRes.ok) {
+            var verifyData = await verifyRes.json();
+            if (verifyData && verifyData.tasks) {
+              // 验证：云端任务数应 >= 我们保存的任务数，且通知数也应 >= 我们保存的通知数
+              var taskCountOk = verifyData.tasks.length >= syncData.tasks.length;
+              var notifCountOk = true;
+              if (syncData.notifications && syncData.notifications.length > 0) {
+                notifCountOk = (verifyData.notifications || []).length >= syncData.notifications.length;
+              }
+              if (taskCountOk && notifCountOk) {
+                verifyOk = true;
+              }
+            }
+          }
+        } catch (e) {
+          console.warn('保存后验证读取失败:', e.message);
+        }
+
+        if (verifyOk) {
+          lastSyncTime = Date.now();
+          lastLocalSaveTime = Date.now();
+          lastDataSnapshot = makeSnapshot(syncData);
+          deletedTaskIds.clear();
+          saveSuccess = true;
+          console.log('保存完成并验证通过: ' + syncData.tasks.length + ' 条任务');
+        } else {
+          // 验证失败：云端可能尚未同步，重试
+          console.warn('保存后验证失败，云端任务数可能不一致，重试');
+          retryCount++;
+          if (retryCount < maxRetries) {
+            // 重试前重新合并云端数据
+            try {
+              var reMergeRes = await apiFetch(CLOUD_DATA_PATH);
+              if (reMergeRes.ok) {
+                var reMergeData = await reMergeRes.json();
+                if (reMergeData && reMergeData.tasks) {
+                  mergeCloudIntoLocal(reMergeData, syncData);
+                }
+              }
+            } catch (e) {}
+            await new Promise(function(r) { setTimeout(r, 500); });
+          }
+        }
       } else {
         console.error('云端保存失败: ' + saveRes.status);
         retryCount++;
         if (retryCount < maxRetries) {
           console.log('保存失败，重试 ' + retryCount + '/' + maxRetries);
-          await new Promise(function(r) { setTimeout(r, 300); });
+          // 重试前重新合并云端数据
+          try {
+            var reMergeRes2 = await apiFetch(CLOUD_DATA_PATH);
+            if (reMergeRes2.ok) {
+              var reMergeData2 = await reMergeRes2.json();
+              if (reMergeData2 && reMergeData2.tasks) {
+                mergeCloudIntoLocal(reMergeData2, syncData);
+              }
+            }
+          } catch (e) {}
+          await new Promise(function(r) { setTimeout(r, 500); });
         }
       }
     }
 
     if (!saveSuccess) {
       console.error('保存最终失败，数据仅保存在本地缓存');
+      // 用户反馈：保存失败，下次操作会自动重试
+      showToast('同步失败，请稍后重试或刷新页面', 'error');
+      // 保存失败后，安排 2 秒后再次尝试
+      setTimeout(function() {
+        if (!isSaving && !saveTimer) {
+          console.log('自动重试保存...');
+          saveData();
+        }
+      }, 2000);
     }
   } catch (e) {
     console.error('保存失败:', e);
@@ -557,9 +637,8 @@ const SAVE_GUARD_WINDOW = 3000; // 保存后 3 秒内保护窗口（降低到 3 
 
 async function pollSync() {
   if (!serverDataLoaded) return;
-  if (isSaving) return;
-  if (saveTimer) return; // 有待保存的修改，等待保存完成
-  if (document.querySelector('.modal.show')) return;
+  if (isSaving) return; // 正在保存时不要轮询
+  if (document.querySelector('.modal.show')) return; // 有弹窗打开时不要轮询（避免覆盖用户正在编辑的数据）
   try {
     const res = await apiFetch(CLOUD_DATA_PATH);
     if (!res.ok) return;
@@ -1491,7 +1570,7 @@ function toggleTaskComplete(taskId) {
       });
     }
   }
-  saveData();
+  saveDataImmediate();
   renderAll();
 }
 
@@ -1845,7 +1924,7 @@ function saveTask() {
     showToast('任务已创建', 'success');
   }
 
-  saveData();
+  saveDataImmediate();
   closeTaskModal();
   renderAll();
 }
@@ -2053,7 +2132,6 @@ function addComment() {
   markActivityRead(task, data.currentUserId);
   // 记录活动（触发其他人红点）
   recordTaskActivity(task, data.currentUserId);
-  saveData();
   renderComments(task);
   input.value = '';
   showToast('评论已发送', 'success');
@@ -2068,6 +2146,9 @@ function addComment() {
     addNotification(uid, 'comment', task.id,
       `${getCurrentUser().name} 在「${task.title}」中评论：${commentPreview}`);
   });
+
+  // 所有修改完成后再统一立即保存
+  saveDataImmediate();
 }
 
 function closeDetailModal() {
@@ -2425,7 +2506,7 @@ function addNotification(userId, type, taskId, text) {
     id: uid('n'), type, taskId, text,
     time: new Date().toISOString(), read: false, userId,
   });
-  saveData();
+  // 注意：不再在此调用 saveData()，由调用方统一保存，避免冗余链式调用
   updateNotifBadge();
 }
 
@@ -2776,8 +2857,16 @@ async function init() {
   // 隐藏加载遮罩
   const loadingOverlay = document.getElementById('loadingOverlay');
   if (loadingOverlay) loadingOverlay.classList.add('hide');
-  // 启动轮询同步（每15秒检查一次其他用户的更新）
-  setInterval(pollSync, 5000);
+  // 启动轮询同步（每 3 秒检查一次其他用户的更新）
+  setInterval(pollSync, 3000);
+  // 首次加载后 1 秒强制同步一次（确保获取最新数据）
+  setTimeout(function() {
+    if (!isSaving && !saveTimer) pollSync();
+  }, 1000);
+  // 3 秒后再强制同步一次（防止 MantleDB 最终一致性问题）
+  setTimeout(function() {
+    if (!isSaving && !saveTimer) pollSync();
+  }, 3000);
 }
 
 // 防止 renderAll 在 data 加载完成前被调用
